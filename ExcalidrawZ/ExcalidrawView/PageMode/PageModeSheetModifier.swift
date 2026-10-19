@@ -29,7 +29,7 @@ private struct PageModeSheetHost: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        Group {
+        SwiftUI.Group {
             if let controller {
                 PageModeSheet(controller: controller)
             } else {
