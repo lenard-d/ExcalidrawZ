@@ -145,6 +145,8 @@ Replace these example values with identifiers registered to your Apple Developer
 
 `ICLOUD_CONTAINER` controls both the app's cloud entitlements and its CloudKit and iCloud Drive access. The shared default is `iCloud.com.chocoford.excalidraw`. Use your own registered container for a separate development app. Missing, empty, or unresolved container configuration disables cloud access instead of selecting the default container at runtime.
 
+A separate test build can set the optional `ExcalidrawZCloudKitEnabled` Boolean to `false` in its local Info.plist. This disables CloudKit even if a saved preference requests sync, and gives a fresh installation a disabled sync preference without launch arguments. The configured container identifier and iCloud Drive behavior stay unchanged. An absent key preserves normal behavior; a present value of any type other than Boolean disables CloudKit. Keep test Info.plist overrides local.
+
 ### Runtime configuration
 
 Create `Config/Secrets.plist` relative to the repository root. The project already references this file and includes it in both app targets' resources. The app's configuration loader stops with `Unable to load Secrets.plist` if the file is missing or invalid.
