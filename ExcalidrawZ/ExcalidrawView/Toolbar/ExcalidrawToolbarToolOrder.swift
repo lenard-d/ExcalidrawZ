@@ -76,6 +76,7 @@ struct ExcalidrawToolbarToolOrder: Equatable, Hashable {
     }
 
     func tool(forShortcutNumber number: Int) -> ExcalidrawTool? {
+        guard (0...9).contains(number) else { return nil }
         let index = number == 0 ? 9 : number - 1
         guard tools.indices.contains(index) else { return nil }
 
