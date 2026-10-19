@@ -3,6 +3,29 @@ import XCTest
 
 final class PageModeControllerTests: XCTestCase {
     @MainActor
+    func testSecondActionCannotOverlapPendingSceneCommand() async throws {
+        let entered = expectation(description: "Scene command entered")
+        var resume: CheckedContinuation<String, Error>?
+        var calls = 0
+        let controller = PageModeController(execute: { _ in
+            calls += 1
+            return try await withCheckedThrowingContinuation { continuation in
+                resume = continuation
+                entered.fulfill()
+            }
+        }, render: { _, _ in Data() }, isCurrent: { true })
+        let first = Task { await controller.perform(.init(action: .list)) }
+        await fulfillment(of: [entered], timeout: 1)
+        let second = await controller.perform(.init(action: .add, width: 595, height: 842))
+        resume?.resume(returning: #"{"pages":[],"openedPageID":null}"#)
+        let succeeded = await first.value
+        XCTAssertFalse(second)
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(controller.isBusy)
+    }
+
+    @MainActor
     func testDocumentSwitchDuringExecutionDiscardsResultAndPrivateExport() async {
         var current = true
         let controller = PageModeController(execute: { _ in
