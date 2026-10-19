@@ -12,6 +12,12 @@ struct ICloudContainerConfiguration {
     let identifier: String?
     let isCloudKitEnabled: Bool
 
+    enum CloudSyncPreferenceReaction {
+        case none
+        case restartRequired
+        case accountUnavailable
+    }
+
     init(infoDictionary: [String: Any]) {
         if let value = infoDictionary["ExcalidrawZCloudKitEnabled"] {
             if let boolean = value as? NSNumber,
@@ -46,6 +52,18 @@ struct ICloudContainerConfiguration {
         if !isCloudKitEnabled {
             defaults.register(defaults: ["DisableCloudSync": true])
         }
+    }
+
+    func isCloudSyncDisabled(userPreference: Bool, hasICloudAccount: Bool) -> Bool {
+        !isCloudKitEnabled || !hasICloudAccount || userPreference
+    }
+
+    func cloudSyncPreferenceReaction(
+        disabled: Bool,
+        hasICloudAccount: Bool
+    ) -> CloudSyncPreferenceReaction {
+        guard isCloudKitEnabled else { return .none }
+        return disabled || hasICloudAccount ? .restartRequired : .accountUnavailable
     }
 
     func ubiquityContainerURL(

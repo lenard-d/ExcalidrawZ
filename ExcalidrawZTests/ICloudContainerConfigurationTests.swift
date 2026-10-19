@@ -2,6 +2,48 @@ import XCTest
 @testable import ExcalidrawZ
 
 final class ICloudContainerConfigurationTests: XCTestCase {
+    func testBuildDisabledSyncStaysVisibleAndDoesNotRequestRestart() {
+        for flag: Any in [false, "false", 0] {
+            let configuration = ICloudContainerConfiguration(infoDictionary: [
+                "ExcalidrawZCloudKitEnabled": flag
+            ])
+            for preference in [true, false] {
+                for hasAccount in [true, false] {
+                    XCTAssertTrue(configuration.isCloudSyncDisabled(
+                        userPreference: preference,
+                        hasICloudAccount: hasAccount
+                    ))
+                    XCTAssertEqual(configuration.cloudSyncPreferenceReaction(
+                        disabled: preference,
+                        hasICloudAccount: hasAccount
+                    ), .none)
+                }
+            }
+        }
+    }
+
+    func testNormalBuildKeepsAccountAndPreferenceDisplayBehavior() {
+        for info: [String: Any] in [[:], ["ExcalidrawZCloudKitEnabled": true]] {
+            let configuration = ICloudContainerConfiguration(infoDictionary: info)
+
+            XCTAssertFalse(configuration.isCloudSyncDisabled(userPreference: false, hasICloudAccount: true))
+            XCTAssertTrue(configuration.isCloudSyncDisabled(userPreference: true, hasICloudAccount: true))
+            XCTAssertTrue(configuration.isCloudSyncDisabled(userPreference: false, hasICloudAccount: false))
+            XCTAssertTrue(configuration.isCloudSyncDisabled(userPreference: true, hasICloudAccount: false))
+        }
+    }
+
+    func testNormalBuildRequestsRestartOrAccountWarningForPreferenceChanges() {
+        for info: [String: Any] in [[:], ["ExcalidrawZCloudKitEnabled": true]] {
+            let configuration = ICloudContainerConfiguration(infoDictionary: info)
+
+            XCTAssertEqual(configuration.cloudSyncPreferenceReaction(disabled: true, hasICloudAccount: true), .restartRequired)
+            XCTAssertEqual(configuration.cloudSyncPreferenceReaction(disabled: false, hasICloudAccount: true), .restartRequired)
+            XCTAssertEqual(configuration.cloudSyncPreferenceReaction(disabled: true, hasICloudAccount: false), .restartRequired)
+            XCTAssertEqual(configuration.cloudSyncPreferenceReaction(disabled: false, hasICloudAccount: false), .accountUnavailable)
+        }
+    }
+
     func testCloudKitUsesConfiguredContainer() {
         let configuration = ICloudContainerConfiguration(infoDictionary: [
             "ExcalidrawZICloudContainerIdentifier": "iCloud.example.separate-test"

@@ -50,13 +50,18 @@ struct ToggleICloudSyncingModifier: ViewModifier {
                 Text(.localizable(.settingsICloudDisableByAccountMessage))
             }
             .watch(value: isICloudDisabled) { newValue in
-                if newValue || FileManager.default.ubiquityIdentityToken != nil {
-                    isRestartAlertPresented.toggle()
-                } else if !newValue,
-                          FileManager.default.ubiquityIdentityToken == nil {
-                    DispatchQueue.main.async {
-                        isDisableBySettingsDialogPresented.toggle()
-                    }
+                switch ICloudContainerConfiguration.current.cloudSyncPreferenceReaction(
+                    disabled: newValue,
+                    hasICloudAccount: FileManager.default.ubiquityIdentityToken != nil
+                ) {
+                    case .none:
+                        break
+                    case .restartRequired:
+                        isRestartAlertPresented.toggle()
+                    case .accountUnavailable:
+                        DispatchQueue.main.async {
+                            isDisableBySettingsDialogPresented.toggle()
+                        }
                 }
             }
     }
