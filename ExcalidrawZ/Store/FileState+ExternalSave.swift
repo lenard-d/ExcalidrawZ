@@ -94,6 +94,9 @@ extension FileState {
         let previousSession = externalSaveSessionID
         canvasSaveCoordinator.invalidate()
         externalSaveSessionID = session
+        if previousSession != session {
+            excalidrawWebCoordinator?.documentSyncController.externalSaveSessionDidChange()
+        }
         Task { await ExternalFileSaveCoordinator.shared.releaseSession(previousSession) }
     }
 

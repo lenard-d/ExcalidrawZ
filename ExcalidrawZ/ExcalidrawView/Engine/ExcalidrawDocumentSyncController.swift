@@ -113,6 +113,11 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
     }
 
     @MainActor
+    func externalSaveSessionDidChange() {
+        canvasMutationSessionChangeSubject.send()
+    }
+
+    @MainActor
     func captureCanvasMutationSession() -> CanvasMutationSession? {
         guard let fileState = core?.parent?.fileState,
               let fileID = core?.parent?.file?.id,
