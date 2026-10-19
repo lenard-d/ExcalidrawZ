@@ -516,8 +516,24 @@ struct ExcalidrawEditor: View {
         }
     }
 
+    @MainActor
+    private func prepareSaveFailureExport() async {
+        guard lockedContentState.activeFileLockState != .locked,
+              let controller = fileState.excalidrawWebCoordinator?.documentSyncController else { return }
+        do {
+            let file = try await controller.currentCanvasFileForRecoveryExport()
+            guard lockedContentState.activeFileLockState != .locked else { return }
+            saveFailureExportFile = file
+        } catch {
+            fileState.externalSaveErrorMessage = "Could not capture the current drawing for export. Your edits remain in this window. Keep it open and try again. " + error.localizedDescription
+        }
+    }
+
     var body: some View {
         editorWithDocumentLifecycle
+#if os(macOS)
+        .guardExternalSaveWindowClose(participant: fileState)
+#endif
         .alert("Drawing not saved", isPresented: Binding(
             get: { fileState.externalSaveErrorMessage != nil },
             set: { if !$0 { fileState.externalSaveErrorMessage = nil } }
@@ -525,7 +541,9 @@ struct ExcalidrawEditor: View {
             Button("Retry save") {
                 Task { await fileState.retryCurrentExternalSave() }
             }
-            Button("Export a copy") { saveFailureExportFile = excalidrawFile }
+            Button("Export a copy") {
+                Task { await prepareSaveFailureExport() }
+            }
             Button("Keep editing", role: .cancel) { }
         } message: {
             Text(fileState.externalSaveErrorMessage ?? "")
@@ -1327,9 +1345,10 @@ struct ExcalidrawEditor: View {
 
             case .localFile(let url), .temporaryFile(let url):
                 if fileState.isApplyingExternalCanvasSnapshot { return .accepted }
+                guard let capture = fileState.captureCanvasSave(expectedFileID: file.id) else { return .rejected }
                 Task {
                     do {
-                        try await fileState.persistExternalCanvasUpdate(file, to: url)
+                        try await fileState.persistExternalCanvasUpdate(file, to: url, capture: capture)
                     } catch is CancellationError {
                         return
                     } catch {

@@ -15,6 +15,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
     private var commitTask: Task<Void, Never>?
     private var latestAppState: ExcalidrawCore.JSONValue?
     private var latestAppStateFileID: String?
+    private var latestCapture: CanvasSaveCapture?
     private var appStateRevision: UInt64 = 0
 
     private let trailingDebounceNanoseconds: UInt64 = 2_000_000_000
@@ -31,7 +32,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         clear()
     }
 
-    func recordLatestAppState(_ metadata: ExcalidrawCore.StateChangedMetadata) {
+    func recordLatestAppState(_ metadata: ExcalidrawCore.StateChangedMetadata, capture: CanvasSaveCapture?) {
         guard metadata.appStateDirty == true,
               let appState = metadata.appState else {
             return
@@ -40,6 +41,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         lock.lock()
         appStateRevision &+= 1
         latestAppState = appState
+        latestCapture = capture
         lock.unlock()
     }
 
@@ -81,6 +83,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         cancelScheduledCommit()
         guard let core = delegate?.snapshotCoordinatorCore else { return }
         let commitState = takePendingCommitState()
+        guard let capture = commitState.capture, capture.isCurrent else { return }
         guard commitState.expectedFileID == expectedFileID,
               let appState = commitState.appState,
               let capturedContent else {
@@ -93,19 +96,17 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 fileID: expectedFileID,
                 target: target
             )
-            guard let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
+            let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
                 persistenceAppState,
                 into: capturedContent,
                 nativeFileName: nativeFileName(for: target)
-            ) else {
-                acknowledge(commitState.revision)
-                return
+            ) ?? capturedContent
+            try await capture.performSave {
+                try await FileState.saveCapturedAppStateOnlyUpdate(
+                    target, content: contentWithAppState, capture: capture
+                )
             }
-            try await FileState.saveCapturedAppStateOnlyUpdate(
-                target,
-                content: contentWithAppState
-            )
-            acknowledge(commitState.revision)
+            capture.acknowledgeDurable { acknowledge(commitState.revision) }
             core.logger.debug("Committed background appState-only canvas update: \(reason) id=\(expectedFileID)")
         } catch {
             core.logger.error("Failed to apply background appState-only canvas update: \(error)")
@@ -146,26 +147,27 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 return false
             }
 
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID) }
+            guard let capture else { throw CancellationError() }
             let appState = try await core.getCurrentAppState()
             let persistenceAppState = try await appStateForPersistence(
                 appState,
                 fileID: expectedFileID,
                 core: core
             )
-            guard let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
+            let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
                 persistenceAppState,
                 into: content,
                 nativeFileName: state.fileName
-            ) else {
-                acknowledge(revision)
-                return true
-            }
+            ) ?? content
             let fileState = await MainActor.run { core.parent?.fileState }
-            try await fileState?.updateAppStateOnlyForCurrentFile(
-                expectedFileID: expectedFileID,
-                content: contentWithAppState
-            )
-            acknowledge(revision)
+            guard let fileState else { throw CancellationError() }
+            try await capture.performSave {
+                try await fileState.updateAppStateOnlyForCurrentFile(
+                    expectedFileID: expectedFileID, content: contentWithAppState, capture: capture
+                )
+            }
+            capture.acknowledgeDurable { acknowledge(revision) }
             core.logger.debug("Committed forced appState-only canvas update: \(reason) id=\(expectedFileID)")
             return true
         } catch is CancellationError {
@@ -203,25 +205,25 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 return false
             }
 
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID) }
+            guard let capture else { throw CancellationError() }
             let appState = try await core.getCurrentAppState()
             let persistenceAppState = try await appStateForPersistence(
                 appState,
                 fileID: expectedFileID,
                 target: target
             )
-            guard let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
+            let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
                 persistenceAppState,
                 into: capturedContent,
                 nativeFileName: nativeFileName(for: target)
-            ) else {
-                acknowledge(revision)
-                return true
+            ) ?? capturedContent
+            try await capture.performSave {
+                try await FileState.saveCapturedAppStateOnlyUpdate(
+                    target, content: contentWithAppState, capture: capture
+                )
             }
-            try await FileState.saveCapturedAppStateOnlyUpdate(
-                target,
-                content: contentWithAppState
-            )
-            acknowledge(revision)
+            capture.acknowledgeDurable { acknowledge(revision) }
             core.logger.debug("Committed forced background appState-only canvas update: \(reason) id=\(expectedFileID)")
             return true
         } catch is CancellationError {
@@ -249,6 +251,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
     private func commit(reason: String) async {
         guard let core = delegate?.snapshotCoordinatorCore else { return }
         let commitState = takePendingCommitState()
+        guard let capture = commitState.capture, capture.isCurrent else { return }
         guard let expectedFileID = commitState.expectedFileID,
               let appState = commitState.appState else {
             return
@@ -287,20 +290,19 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 content: content
             )
 #endif
-            guard let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
+            let contentWithAppState = try Self.mergingAppStateIfSemanticallyChanged(
                 persistenceAppState,
                 into: content,
                 nativeFileName: state.fileName
-            ) else {
-                acknowledge(commitState.revision)
-                return
-            }
+            ) ?? content
             let fileState = await MainActor.run { core.parent?.fileState }
-            try await fileState?.updateAppStateOnlyForCurrentFile(
-                expectedFileID: expectedFileID,
-                content: contentWithAppState
-            )
-            acknowledge(commitState.revision)
+            guard let fileState else { throw CancellationError() }
+            try await capture.performSave {
+                try await fileState.updateAppStateOnlyForCurrentFile(
+                    expectedFileID: expectedFileID, content: contentWithAppState, capture: capture
+                )
+            }
+            capture.acknowledgeDurable { acknowledge(commitState.revision) }
         } catch {
             core.logger.error("Failed to apply appState-only canvas update: \(error)")
             await reportExternalFailure(error, core: core)
@@ -331,15 +333,21 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
     private func takePendingCommitState() -> (
         expectedFileID: String?,
         appState: ExcalidrawCore.JSONValue?,
-        revision: UInt64
+        revision: UInt64,
+        capture: CanvasSaveCapture?
     ) {
         lock.lock()
         let fileID = latestAppStateFileID
         let appState = latestAppState
         let revision = appStateRevision
+        let capture = latestCapture
         lock.unlock()
-        return (fileID, appState, revision)
+        return (fileID, appState, revision, capture)
     }
+
+    var pendingRevision: UInt64 { lock.withLock { appStateRevision } }
+
+    func acknowledgeFullSnapshot(_ revision: UInt64) { acknowledge(revision) }
 
     private func acknowledge(_ revision: UInt64) {
         lock.lock()
@@ -423,6 +431,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         }
         commitTask = nil
         latestAppState = nil
+        latestCapture = nil
         latestAppStateFileID = nil
     }
 

@@ -22,7 +22,8 @@ protocol ExcalidrawDocumentSnapshotCoordinatorDelegate: AnyObject {
         currentFileID: String?,
         type: ExcalidrawCanvasView.ExcalidrawType?,
         savingType: UTType?,
-        markProgrammaticCommit: Bool
+        markProgrammaticCommit: Bool,
+        capture: CanvasSaveCapture?
     ) async throws
 
     func snapshotCoordinatorMakeFileData(
@@ -66,38 +67,44 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         reset()
     }
 
-    var hasPendingDirtySnapshot: Bool { contentScheduler.hasPendingDirtySnapshot() || appStateSaver.hasPendingSave || programmaticCommitter.hasPendingSave }
+    var hasPendingDirtySnapshot: Bool { delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingSave == true || contentScheduler.hasPendingDirtySnapshot() || appStateSaver.hasPendingSave || programmaticCommitter.hasPendingSave }
 
+    @MainActor
     func handleStateChangedMetadata(
         _ metadata: ExcalidrawCore.StateChangedMetadata,
         currentFileID: String?,
         type _: ExcalidrawCanvasView.ExcalidrawType?,
-        savingType: UTType?
-    ) async {
+        savingType: UTType?,
+        capture: CanvasSaveCapture?
+    ) {
         guard metadata.hasAnyDirtyChanges else {
-            contentScheduler.markClean(metadata.revision)
+            // A WebView clean notification is not a durable writer receipt.
+            return
+        }
+
+        guard let capture else { return }
+        try? capture.withAdmission {
+            contentScheduler.recordLatestRevision(metadata.revision)
+            appStateSaver.recordLatestAppState(metadata, capture: capture)
+
+            guard metadata.shouldPullContentSnapshot else {
+                appStateSaver.schedule(
+                    metadata,
+                    currentFileID: currentFileID,
+                    savingType: savingType
+                )
+                return
+            }
+
             appStateSaver.clear()
-            return
-        }
-
-        contentScheduler.recordLatestRevision(metadata.revision)
-        appStateSaver.recordLatestAppState(metadata)
-
-        guard metadata.shouldPullContentSnapshot else {
-            appStateSaver.schedule(
-                metadata,
-                currentFileID: currentFileID,
-                savingType: savingType
+            contentScheduler.recordPendingContentDirty(
+                fileID: metadata.currentFileId ?? currentFileID,
+                revision: metadata.revision
             )
-            return
         }
-
-        appStateSaver.clear()
-        contentScheduler.recordPendingContentDirty(
-            fileID: metadata.currentFileId ?? currentFileID,
-            revision: metadata.revision
-        )
     }
+
+    func waitForOwnedCanvasOperations() async -> Bool { await programmaticCommitter.waitUntilIdle() }
 
     @MainActor
     func performOwnedCanvasMutation(
@@ -132,7 +139,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 requirePendingDirty: !force,
                 validateParentFileID: validateParentFileID
             )
-        } else if programmaticCommitter.hasPendingSave {
+        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingSave == true {
             await commitDirtySnapshot(
                 reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
                 requirePendingDirty: false, validateParentFileID: validateParentFileID
@@ -244,6 +251,9 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
             }
 
             let mutationRevision = await programmaticCommitter.pendingRevision(fileID: currentFileID ?? "")
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: currentFileID) }
+            guard let capture else { throw CancellationError() }
+            let appStateRevision = appStateSaver.pendingRevision
             let snapshot = try await core.getCurrentFileSnapshot()
             if let expectedRevision,
                let snapshotRevision = snapshot.revision,
@@ -259,13 +269,14 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 currentFileID: currentFileID,
                 type: type,
                 savingType: savingType,
-                markProgrammaticCommit: false
+                markProgrammaticCommit: false,
+                capture: capture
             )
-            programmaticCommitter.acknowledge(mutationRevision)
-            contentScheduler.markCommitted(
-                snapshotRevision: snapshot.revision,
-                fallbackRevision: expectedRevision
-            )
+            capture.acknowledgeDurable {
+                programmaticCommitter.acknowledge(mutationRevision)
+                appStateSaver.acknowledgeFullSnapshot(appStateRevision)
+                contentScheduler.markCommitted(snapshotRevision: snapshot.revision, fallbackRevision: expectedRevision)
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -291,7 +302,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 target: target,
                 capturedContent: capturedContent
             )
-        } else if programmaticCommitter.hasPendingSave {
+        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingSave == true {
             await commitDirtySnapshotToCapturedTarget(
                 reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
                 target: target, capturedContent: capturedContent
@@ -340,6 +351,11 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
             }
 
             let mutationRevision = await programmaticCommitter.pendingRevision(fileID: expectedFileID)
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID) }
+            guard let capture, target.saveSessionID == nil || target.saveSessionID == capture.owner.saveSession else {
+                throw CancellationError()
+            }
+            let appStateRevision = appStateSaver.pendingRevision
             let snapshot = try await core.getCurrentFileSnapshot()
             if let expectedRevision,
                let snapshotRevision = snapshot.revision,
@@ -359,19 +375,20 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
             file.content = capturedContent ?? file.content
             try file.update(data: fileData)
             let capturedFile = file
+            try capture.withAdmission {}
             if case .localFile = target.kind {
                 await MainActor.run {
-                    guard core.parent?.file?.id == expectedFileID,
+                    guard capture.isCurrent, core.parent?.file?.id == expectedFileID,
                           let fileState = core.parent?.fileState else { return }
                     fileState.applyExternalCanvasSnapshot { core.parent?.file = capturedFile }
                 }
             }
-            try await FileState.saveCapturedCanvasUpdate(target, with: file)
-            programmaticCommitter.acknowledge(mutationRevision)
-            contentScheduler.markCommitted(
-                snapshotRevision: snapshot.revision,
-                fallbackRevision: expectedRevision
-            )
+            try await FileState.saveCapturedCanvasUpdate(target, with: file, capture: capture)
+            capture.acknowledgeDurable {
+                programmaticCommitter.acknowledge(mutationRevision)
+                appStateSaver.acknowledgeFullSnapshot(appStateRevision)
+                contentScheduler.markCommitted(snapshotRevision: snapshot.revision, fallbackRevision: expectedRevision)
+            }
             core.logger.debug("Committed background dirty canvas snapshot: \(reason) id=\(expectedFileID)")
         } catch is CancellationError {
             return
