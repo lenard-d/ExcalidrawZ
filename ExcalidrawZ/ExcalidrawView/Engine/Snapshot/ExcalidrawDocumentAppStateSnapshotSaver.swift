@@ -101,12 +101,12 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 into: capturedContent,
                 nativeFileName: nativeFileName(for: target)
             ) ?? capturedContent
-            try await capture.performSave {
+            try await capture.performSave(coverage: .appState) {
                 try await FileState.saveCapturedAppStateOnlyUpdate(
                     target, content: contentWithAppState, capture: capture
                 )
             }
-            capture.acknowledgeDurable { acknowledge(commitState.revision) }
+            capture.acknowledgeDurable(coverage: .appState) { acknowledge(commitState.revision) }
             core.logger.debug("Committed background appState-only canvas update: \(reason) id=\(expectedFileID)")
         } catch {
             core.logger.error("Failed to apply background appState-only canvas update: \(error)")
@@ -147,7 +147,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 return false
             }
 
-            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID) }
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID, intent: .appState) }
             guard let capture else { throw CancellationError() }
             let appState = try await core.getCurrentAppState()
             let persistenceAppState = try await appStateForPersistence(
@@ -162,12 +162,12 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
             ) ?? content
             let fileState = await MainActor.run { core.parent?.fileState }
             guard let fileState else { throw CancellationError() }
-            try await capture.performSave {
+            try await capture.performSave(coverage: .appState) {
                 try await fileState.updateAppStateOnlyForCurrentFile(
                     expectedFileID: expectedFileID, content: contentWithAppState, capture: capture
                 )
             }
-            capture.acknowledgeDurable { acknowledge(revision) }
+            capture.acknowledgeDurable(coverage: .appState) { acknowledge(revision) }
             core.logger.debug("Committed forced appState-only canvas update: \(reason) id=\(expectedFileID)")
             return true
         } catch is CancellationError {
@@ -205,7 +205,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 return false
             }
 
-            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID) }
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID, intent: .appState) }
             guard let capture else { throw CancellationError() }
             let appState = try await core.getCurrentAppState()
             let persistenceAppState = try await appStateForPersistence(
@@ -218,12 +218,12 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 into: capturedContent,
                 nativeFileName: nativeFileName(for: target)
             ) ?? capturedContent
-            try await capture.performSave {
+            try await capture.performSave(coverage: .appState) {
                 try await FileState.saveCapturedAppStateOnlyUpdate(
                     target, content: contentWithAppState, capture: capture
                 )
             }
-            capture.acknowledgeDurable { acknowledge(revision) }
+            capture.acknowledgeDurable(coverage: .appState) { acknowledge(revision) }
             core.logger.debug("Committed forced background appState-only canvas update: \(reason) id=\(expectedFileID)")
             return true
         } catch is CancellationError {
@@ -297,12 +297,12 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
             ) ?? content
             let fileState = await MainActor.run { core.parent?.fileState }
             guard let fileState else { throw CancellationError() }
-            try await capture.performSave {
+            try await capture.performSave(coverage: .appState) {
                 try await fileState.updateAppStateOnlyForCurrentFile(
                     expectedFileID: expectedFileID, content: contentWithAppState, capture: capture
                 )
             }
-            capture.acknowledgeDurable { acknowledge(commitState.revision) }
+            capture.acknowledgeDurable(coverage: .appState) { acknowledge(commitState.revision) }
         } catch {
             core.logger.error("Failed to apply appState-only canvas update: \(error)")
             await reportExternalFailure(error, core: core)

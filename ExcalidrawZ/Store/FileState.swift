@@ -679,7 +679,7 @@ final class FileState: ObservableObject {
     }
 
     @MainActor
-    private func canvasCoordinator(for activeFile: ActiveFile) -> ExcalidrawCanvasView.Coordinator? {
+    func canvasCoordinator(for activeFile: ActiveFile) -> ExcalidrawCanvasView.Coordinator? {
         if case .collaborationFile = activeFile {
             return excalidrawCollaborationWebCoordinator
         }
@@ -747,30 +747,30 @@ final class FileState: ObservableObject {
                     reportExternalSaveFailure(CocoaError(.fileWriteUnknown), at: url, force: true)
                     return false
                 }
-            } else if file == nil {
-                isFinalizingActiveFileClose = true
-                defer {
-                    isFinalizingActiveFileClose = false
-                }
-
-                await coordinator?.documentSyncController.flushPendingDirtySnapshotToCapturedTarget(
-                    reason: "activeFileClose",
-                    expectedFileID: previousFile.id,
-                    target: saveTarget,
-                    forceCurrentAppState: true
-                )
-                await FileCoverCacheCoordinator.shared.cacheCurrentViewportPreview(
-                    for: previousFile
-                )
             } else {
-                await FileCoverCacheCoordinator.shared.cacheCurrentViewportPreview(
-                    for: previousFile
-                )
-                await coordinator?.documentSyncController.flushPendingDirtySnapshotInBackground(
-                    reason: "activeFileWillChange",
-                    expectedFileID: previousFile.id,
-                    target: saveTarget
-                )
+                isFinalizingActiveFileClose = true
+                await FileCoverCacheCoordinator.shared.cacheCurrentViewportPreview(for: previousFile)
+                let owner = coordinator?.documentSyncController.captureCanvasMutationSession()
+                let canLeave: Bool
+                if let owner {
+                    canLeave = await CanvasSaveTransition.prepare(
+                        owner: owner,
+                        currentOwner: { coordinator?.documentSyncController.captureCanvasMutationSession() },
+                        flush: {
+                            await coordinator?.documentSyncController.flushPendingDirtySnapshotToCapturedTarget(
+                                reason: "activeFileWillChange",
+                                expectedFileID: previousFile.id,
+                                target: saveTarget,
+                                forceCurrentAppState: true
+                            )
+                        },
+                        hasPendingSave: { coordinator?.documentSyncController.hasPendingDirtySnapshot == true }
+                    )
+                } else {
+                    canLeave = coordinator?.documentSyncController.hasPendingDirtySnapshot != true
+                }
+                isFinalizingActiveFileClose = false
+                guard canLeave, !Task.isCancelled, currentActiveFile == previousFile else { return false }
             }
         }
 

@@ -2,10 +2,11 @@ import Foundation
 
 extension FileState {
     @MainActor
-    func captureCanvasSave(expectedFileID: String? = nil) -> CanvasSaveCapture? {
-        guard let session = excalidrawWebCoordinator?.documentSyncController.captureCanvasMutationSession(),
+    func captureCanvasSave(expectedFileID: String? = nil, intent: CanvasSaveCoverage = .fullScene) -> CanvasSaveCapture? {
+        guard let activeFile = currentActiveFile,
+              let session = canvasCoordinator(for: activeFile)?.documentSyncController.captureCanvasMutationSession(),
               expectedFileID == nil || session.fileID == expectedFileID else { return nil }
-        return canvasSaveCoordinator.capture(owner: session)
+        return canvasSaveCoordinator.capture(owner: session, intent: intent)
     }
 
     @MainActor

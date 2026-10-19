@@ -139,7 +139,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 requirePendingDirty: !force,
                 validateParentFileID: validateParentFileID
             )
-        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingSave == true {
+        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingFullContent == true {
             await commitDirtySnapshot(
                 reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
                 requirePendingDirty: false, validateParentFileID: validateParentFileID
@@ -152,25 +152,6 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         } else {
             await appStateSaver.flush(reason: reason)
         }
-    }
-
-    @MainActor
-    func flushPendingDirtySnapshotInBackground(
-        reason: String,
-        expectedFileID: String,
-        target: FileState.CapturedCanvasSaveTarget
-    ) async {
-        let capturedContent = delegate?.snapshotCoordinatorCore?.parent?.file?.content
-        Task(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            await self.flushPendingDirtySnapshotToCapturedTarget(
-                reason: reason,
-                expectedFileID: expectedFileID,
-                target: target,
-                capturedContent: capturedContent
-            )
-        }
-        await Task.yield()
     }
 
     func flushPendingDirtySnapshotToCapturedTarget(
@@ -302,7 +283,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 target: target,
                 capturedContent: capturedContent
             )
-        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingSave == true {
+        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingFullContent == true {
             await commitDirtySnapshotToCapturedTarget(
                 reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
                 target: target, capturedContent: capturedContent
