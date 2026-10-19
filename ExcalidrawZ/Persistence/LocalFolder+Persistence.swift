@@ -343,7 +343,13 @@ extension LocalFolder {
         }
         activeRefreshes[rootID] = (refreshID, task)
         return try await withTaskCancellationHandler {
-            try await task.value
+            do {
+                return try await task.value
+            } catch is CancellationError {
+                // Replacing this root's worker must not cancel an active caller's other roots.
+                try Task.checkCancellation()
+                return nil
+            }
         } onCancel: {
             task.cancel()
         }

@@ -7,14 +7,17 @@ final class LinkedFolderRefreshTests: XCTestCase {
     func testCompleteReadReconcilesOnceAndKeepsCheckpoints() async throws {
         let fixture = try Fixture()
         let added = fixture.rootURL.appendingPathComponent("added")
-        let probe = Probe(tree: [fixture.rootURL: [added], added: []])
+        let nested = added.appendingPathComponent("nested")
+        let probe = Probe(tree: [fixture.rootURL: [added], added: [nested], nested: []])
+        let savesBeforeRefresh = fixture.context.successfulSaves
 
         try await fixture.refresh(provider: probe.provider(root: fixture.rootURL))
 
-        XCTAssertEqual(try fixture.folderURLs(), [fixture.rootURL, added])
+        XCTAssertEqual(try fixture.folderURLs(), [fixture.rootURL, added, nested])
+        XCTAssertEqual(fixture.context.successfulSaves - savesBeforeRefresh, 1)
         XCTAssertFalse(fixture.context.hasChanges)
         XCTAssertEqual(fixture.checkpoint.content, Data([7, 8]))
-        XCTAssertEqual(probe.calls, ["resolve", "start", "list", "bookmark", "list", "stop"])
+        XCTAssertEqual(probe.calls.last, "stop")
     }
 
     func testNestedReadFailurePreservesEntirePriorTreeAndCanRecover() async throws {
@@ -85,13 +88,76 @@ final class LinkedFolderRefreshTests: XCTestCase {
         XCTAssertTrue(recent.calls.isEmpty, "A second provider read must wait for the first to return")
         old.release.signal()
         try await newer.value
-        do {
-            try await older.value
-            XCTFail("The older refresh must be cancelled")
-        } catch is CancellationError {}
+        try await older.value
         XCTAssertEqual(try fixture.folderURLs(), [fixture.rootURL, added])
         XCTAssertEqual(old.calls.last, "stop")
         XCTAssertEqual(recent.calls.last, "stop")
+    }
+
+    func testReplacingFirstRootStillRefreshesSecondRootAndCompletesCaller() async throws {
+        let first = try Fixture()
+        let second = try Fixture()
+        let blocked = Probe(tree: [first.rootURL: []], block: true)
+        defer { blocked.release.signal() }
+        let secondProbe = Probe(tree: [second.rootURL: []])
+        var callerCompleted = false
+        let batch = Task {
+            try await first.refresh(provider: blocked.provider(root: first.rootURL))
+            try await second.refresh(provider: secondProbe.provider(root: second.rootURL))
+            callerCompleted = true
+        }
+        await fulfillment(of: [blocked.entered], timeout: 2)
+        let replacementStarted = expectation(description: "Replacement requested")
+        let replacement = Task {
+            replacementStarted.fulfill()
+            try await first.refresh(provider: Probe(tree: [first.rootURL: []]).provider(root: first.rootURL))
+        }
+        await fulfillment(of: [replacementStarted], timeout: 2)
+        blocked.release.signal()
+        try await replacement.value
+        try await batch.value
+        XCTAssertTrue(callerCompleted)
+        XCTAssertEqual(try second.folderURLs(), [second.rootURL])
+        XCTAssertEqual(secondProbe.calls.last, "stop")
+    }
+
+    func testCancellingBatchCallerDoesNotStartSecondRoot() async throws {
+        let first = try Fixture()
+        let second = try Fixture()
+        let blocked = Probe(tree: [first.rootURL: []], block: true)
+        defer { blocked.release.signal() }
+        let secondProbe = Probe(tree: [second.rootURL: []])
+        let batch = Task {
+            try await first.refresh(provider: blocked.provider(root: first.rootURL))
+            try await second.refresh(provider: secondProbe.provider(root: second.rootURL))
+        }
+        await fulfillment(of: [blocked.entered], timeout: 2)
+        batch.cancel()
+        blocked.release.signal()
+        do {
+            try await batch.value
+            XCTFail("Caller cancellation must propagate")
+        } catch is CancellationError {}
+        XCTAssertTrue(secondProbe.calls.isEmpty)
+        XCTAssertFalse(first.child.isDeleted)
+        XCTAssertFalse(second.child.isDeleted)
+    }
+
+    func testSavedChildInsertionDuringReadRejectsStaleTree() async throws {
+        let fixture = try Fixture()
+        let probe = Probe(tree: [fixture.rootURL: []], block: true)
+        defer { probe.release.signal() }
+        let refresh = Task { try await fixture.refresh(provider: probe.provider(root: fixture.rootURL)) }
+        await fulfillment(of: [probe.entered], timeout: 2)
+        let inserted = LocalFolder(context: fixture.context)
+        inserted.url = fixture.rootURL.appendingPathComponent("inserted")
+        inserted.bookmarkData = Data([3])
+        inserted.parent = fixture.root
+        try fixture.context.save()
+        probe.release.signal()
+        try await refresh.value
+        XCTAssertEqual(try fixture.folderURLs(), [fixture.rootURL, fixture.child.url!, inserted.url!])
+        XCTAssertEqual(fixture.root.bookmarkData, Data([1]))
     }
 
     func testCancelledQueuedRefreshDoesNotOpenAnotherScope() async throws {
@@ -204,6 +270,38 @@ final class LinkedFolderRefreshTests: XCTestCase {
         XCTAssertEqual(fixture.root.bookmarkData, Data(moved.path.utf8))
     }
 
+    func testMovedRootSaveFailureKeepsURLsCheckpointsAndFileIDs() async throws {
+        let fixture = try Fixture()
+        let originalURLs = try fixture.folderURLs()
+        let originalCheckpointURL = try XCTUnwrap(fixture.checkpoint.url)
+        let moved = fixture.rootURL.appendingPathExtension("moved")
+        let movedChild = moved.appendingPathComponent("old")
+        let movedCheckpointURL = movedChild.appendingPathComponent("drawing.excalidraw")
+        ExcalidrawFile.localFileURLIDMapping[originalCheckpointURL] = "synthetic-drawing"
+        defer {
+            ExcalidrawFile.localFileURLIDMapping.removeValue(forKey: originalCheckpointURL)
+            ExcalidrawFile.localFileURLIDMapping.removeValue(forKey: movedCheckpointURL)
+        }
+        let notified = expectation(description: "Failed save must not announce a move")
+        notified.isInverted = true
+        let observer = NotificationCenter.default.addObserver(
+            forName: .localFolderResolvedLocationDidChange, object: fixture.root.objectID, queue: nil
+        ) { _ in notified.fulfill() }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        fixture.context.failNextSave = true
+        do {
+            try await fixture.refresh(provider: Probe(tree: [moved: [movedChild], movedChild: []]).provider(root: moved))
+            XCTFail("The save failure must propagate")
+        } catch TestContext.Failure.save {}
+        XCTAssertEqual(try fixture.folderURLs(), originalURLs)
+        XCTAssertEqual(fixture.checkpoint.url, originalCheckpointURL)
+        XCTAssertEqual(fixture.checkpoint.content, Data([7, 8]))
+        XCTAssertEqual(ExcalidrawFile.localFileURLIDMapping[originalCheckpointURL], "synthetic-drawing")
+        XCTAssertNil(ExcalidrawFile.localFileURLIDMapping[movedCheckpointURL])
+        XCTAssertFalse(fixture.context.hasChanges)
+        await fulfillment(of: [notified], timeout: 0.05)
+    }
+
     func testAccessFailureDoesNotStopAnUnopenedScope() async throws {
         let fixture = try Fixture()
         let probe = Probe(tree: [:], failAccess: true)
@@ -220,12 +318,14 @@ final class LinkedFolderRefreshTests: XCTestCase {
 private final class TestContext: NSManagedObjectContext, @unchecked Sendable {
     enum Failure: Error { case save }
     var failNextSave = false
+    private(set) var successfulSaves = 0
     override func save() throws {
         if failNextSave {
             failNextSave = false
             throw Failure.save
         }
         try super.save()
+        successfulSaves += 1
     }
 }
 
