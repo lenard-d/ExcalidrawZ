@@ -2,6 +2,7 @@ import Foundation
 
 /// Classifies one directory while the caller holds access to its linked root.
 /// Read failures and cancellation never return a partial directory list.
+/// Cancellation takes effect after an in-progress provider read returns.
 struct ExternalFolderDirectoryScanner: Sendable {
     struct Metadata: Sendable {
         let isDirectory: Bool?
