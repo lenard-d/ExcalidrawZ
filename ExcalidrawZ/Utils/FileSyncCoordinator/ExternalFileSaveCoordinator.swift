@@ -54,6 +54,7 @@ actor ExternalFileSaveCoordinator {
         let generation: UInt64
         let content: Data
         let capture: CanvasSaveCapture?
+        let coverage: CanvasSaveCoverage
     }
 
     private var generation: UInt64 = 0
@@ -99,9 +100,13 @@ actor ExternalFileSaveCoordinator {
     }
 
     func save(_ content: Data, to url: URL, session: UUID? = nil, capture: CanvasSaveCapture? = nil, writer: @escaping Writer) async throws {
+        try await enqueue(content, to: url, session: session, capture: capture, coverage: .fullScene, writer: writer)
+    }
+
+    private func enqueue(_ content: Data, to url: URL, session: UUID?, capture: CanvasSaveCapture?, coverage: CanvasSaveCoverage, writer: @escaping Writer) async throws {
         let key = Target(url: url.standardizedFileURL, session: session)
         generation &+= 1
-        let request = Pending(generation: generation, content: content, capture: capture)
+        let request = Pending(generation: generation, content: content, capture: capture, coverage: coverage)
         if let capture {
             guard capture.owner.saveSession == session else { throw CancellationError() }
             try capture.withAdmission { pending[key] = request }
@@ -139,7 +144,7 @@ actor ExternalFileSaveCoordinator {
     func retry(at url: URL, session: UUID? = nil, writer: @escaping Writer) async throws {
         let key = Target(url: url.standardizedFileURL, session: session)
         guard let request = pending[key] else { return }
-        try await save(request.content, to: url, session: session, capture: request.capture, writer: writer)
+        try await enqueue(request.content, to: url, session: session, capture: request.capture, coverage: request.coverage, writer: writer)
     }
 
     /// Metadata saves merge into the latest queued drawing, or the confirmed drawing.
@@ -154,7 +159,7 @@ actor ExternalFileSaveCoordinator {
         document["appState"] = ExcalidrawDocumentAppStatePersistence.appStateObjectByMergingAppStateOnlyPersistentFields(
             from: appState, into: document["appState"] ?? [:], nativeFileName: nil
         )
-        try await save(JSONSerialization.data(withJSONObject: document), to: key.url, session: session, capture: capture, writer: writer)
+        try await enqueue(JSONSerialization.data(withJSONObject: document), to: key.url, session: session, capture: capture, coverage: .appState, writer: writer)
     }
 
     private func write(_ request: Pending, to key: Target, writer: Writer) async throws {
@@ -175,7 +180,7 @@ actor ExternalFileSaveCoordinator {
         if let capture = request.capture {
             try capture.withAdmission {}
             var receipt: ExternalFileVersion?
-            try await capture.performSave {
+            try await capture.performSave(coverage: request.coverage) {
                 receipt = try await writer(request.content, key.url, baseline)
             }
             guard let receipt else { throw CocoaError(.fileWriteUnknown) }

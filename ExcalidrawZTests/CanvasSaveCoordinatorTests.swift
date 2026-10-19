@@ -32,7 +32,7 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         scheduler.recordPendingContentDirty(fileID: owner.fileID, revision: 1)
         let oldState = try XCTUnwrap(scheduler.takeFlushState())
         let oldCapture = captures.capture(owner: owner)
-        let gate = SaveCaptureGate()
+        let gate = SaveTestGate()
         let old = Task {
             try await gate.pause()
             try await files.save(Data("revision 1".utf8), to: url, session: owner.saveSession, capture: oldCapture, writer: ExternalFileWriter.write)
@@ -40,13 +40,13 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
                 scheduler.markCommitted(snapshotRevision: 1, fallbackRevision: oldState.expectedRevision)
             }
         }
-        await gate.waitUntilPaused()
+        try await gate.waitUntilPaused()
         scheduler.recordPendingContentDirty(fileID: owner.fileID, revision: 2)
         let latest = captures.capture(owner: owner)
         try await files.save(Data("revision 2".utf8), to: url, session: owner.saveSession, capture: latest, writer: ExternalFileWriter.write)
         XCTAssertTrue(latest.acknowledgeDurable { scheduler.markCommitted(snapshotRevision: 2, fallbackRevision: 2) })
         await gate.release()
-        do { _ = try await old.value; XCTFail("The delayed old capture must be rejected") }
+        do { _ = try await boundedSaveTestValue(old); XCTFail("The delayed old capture must be rejected") }
         catch is CancellationError { }
         XCTAssertEqual(try String(contentsOf: url), "revision 2")
         XCTAssertFalse(scheduler.hasPendingDirtySnapshot())
@@ -91,14 +91,14 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         let owner = owner()
         try await register(files, url, owner)
         let first = captures.capture(owner: owner)
-        let writer = SaveCaptureGate()
+        let writer = SaveTestGate()
         let old = Task {
             try await files.save(Data("first".utf8), to: url, session: owner.saveSession, capture: first) { content, target, baseline in
                 try await writer.pause()
                 return try await ExternalFileWriter.write(content, to: target, replacing: baseline)
             }
         }
-        await writer.waitUntilPaused()
+        try await writer.waitUntilPaused()
         let latest = captures.capture(owner: owner)
         let bytes = Data("latest".utf8)
         let queued = Task { try await files.save(bytes, to: url, session: owner.saveSession, capture: latest, writer: ExternalFileWriter.write) }
@@ -110,8 +110,8 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         }
         queued.cancel()
         await writer.release()
-        try await old.value
-        do { try await queued.value; XCTFail("The queued write must report cancellation") }
+        try await boundedSaveTestValue(old)
+        do { try await boundedSaveTestValue(queued); XCTFail("The queued write must report cancellation") }
         catch is CancellationError { }
         XCTAssertEqual(try String(contentsOf: url), "first")
         XCTAssertFalse(first.acknowledgeDurable {})
@@ -130,18 +130,18 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         let owner = owner()
         try await register(files, url, owner)
         let capture = captures.capture(owner: owner)
-        let gate = InFlightReceiptGate()
+        let gate = SaveTestGate()
         let save = Task {
             try await files.save(Data("confirmed despite waiter cancellation".utf8), to: url, session: owner.saveSession, capture: capture) { content, target, baseline in
-                await gate.pause()
+                try await gate.pause(ignoringCancellation: true)
                 // The already-started provider callback owns its outcome, independently of the waiter.
                 return try await Task.detached { try await ExternalFileWriter.write(content, to: target, replacing: baseline) }.value
             }
         }
-        await gate.waitUntilPaused()
+        try await gate.waitUntilPaused()
         save.cancel()
         await gate.release()
-        try await save.value
+        try await boundedSaveTestValue(save)
         XCTAssertEqual(try String(contentsOf: url), "confirmed despite waiter cancellation")
         XCTAssertTrue(capture.acknowledgeDurable {})
         XCTAssertFalse(captures.hasPendingSave)
@@ -160,15 +160,15 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         let beforeOperation = captures.capture(owner: owner)
         // This synchronous intent invalidates captures made before dispatching owned JS work.
         _ = captures.capture(owner: owner)
-        let gate = InFlightReceiptGate()
+        let gate = SaveTestGate()
         var scene = "before operation"
         let operation = Task { @MainActor in
             try await mutations.perform(in: owner) {
-                await gate.pause()
+                try await gate.pause()
                 scene = "completed operation"
             }
         }
-        await gate.waitUntilPaused()
+        try await gate.waitUntilPaused()
         let flushed = XCTestExpectation(description: "Owned scene durably saved")
         let flush = Task { @MainActor in
             guard await mutations.waitUntilIdle() else { throw CancellationError() }
@@ -181,8 +181,8 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         XCTAssertTrue(mutations.hasPendingSave)
         XCTAssertFalse(beforeOperation.acknowledgeDurable {})
         await gate.release()
-        try await operation.value
-        try await flush.value
+        try await boundedSaveTestValue(operation)
+        try await boundedSaveTestValue(flush)
         let result = await XCTWaiter.fulfillment(of: [flushed], timeout: 2)
         XCTAssertEqual(result, .completed)
         XCTAssertEqual(try String(contentsOf: url), "completed operation")
@@ -237,7 +237,7 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         let captures = CanvasSaveCoordinator()
         let owner = owner()
         try await register(files, url, owner)
-        let oldMetadata = captures.capture(owner: owner)
+        let oldMetadata = captures.capture(owner: owner, intent: .appState)
         let full = captures.capture(owner: owner)
         let scene = Data("{\"elements\":[\"latest\"],\"appState\":{\"gridSize\":20}}".utf8)
         try await files.save(scene, to: url, session: owner.saveSession, capture: full, writer: ExternalFileWriter.write)
@@ -245,13 +245,73 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
             try await files.saveAppState(from: Data("{\"appState\":{\"gridSize\":5}}".utf8), to: url, session: owner.saveSession, capture: oldMetadata, writer: ExternalFileWriter.write)
             XCTFail("Old app state must not replace a newer full scene")
         } catch is CancellationError { }
-        let freshMetadata = captures.capture(owner: owner)
+        let freshMetadata = captures.capture(owner: owner, intent: .appState)
         try await files.saveAppState(from: Data("{\"appState\":{\"gridSize\":30}}".utf8), to: url, session: owner.saveSession, capture: freshMetadata, writer: ExternalFileWriter.write)
         let document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         XCTAssertEqual(document["elements"] as? [String], ["latest"])
         XCTAssertEqual((document["appState"] as? [String: Any])?["gridSize"] as? Int, 30)
-        XCTAssertTrue(freshMetadata.acknowledgeDurable {})
+        XCTAssertTrue(freshMetadata.acknowledgeDurable(coverage: .appState) {})
+        XCTAssertFalse(captures.hasPendingSave)
+        XCTAssertFalse(captures.hasPendingFullContent)
         XCTAssertFalse(full.acknowledgeDurable {})
+    }
+
+    func testMetadataReceiptCannotConsumeUnmaterializedFullIntentAndFreshFullRetrySavesLatest() async throws {
+        let url = try fixture("{\"elements\":[\"old\"],\"appState\":{\"gridSize\":10}}")
+        let files = ExternalFileSaveCoordinator()
+        let captures = CanvasSaveCoordinator()
+        let owner = owner()
+        try await register(files, url, owner)
+        // Both direct native edits and legacy full events capture full intent before their Task/read.
+        let full = captures.capture(owner: owner, intent: .fullScene)
+        let gate = SaveTestGate()
+        let latestScene = Data("{\"elements\":[\"latest\"],\"appState\":{\"gridSize\":20}}".utf8)
+        let delayed = Task {
+            try await gate.pause()
+            try await files.save(latestScene, to: url, session: owner.saveSession, capture: full, writer: ExternalFileWriter.write)
+        }
+        try await gate.waitUntilPaused()
+        let metadata = captures.capture(owner: owner, intent: .appState)
+        try await files.saveAppState(from: Data("{\"appState\":{\"gridSize\":20}}".utf8), to: url, session: owner.saveSession, capture: metadata, writer: ExternalFileWriter.write)
+        XCTAssertTrue(metadata.acknowledgeDurable(coverage: .appState) {})
+        XCTAssertFalse(metadata.acknowledgeDurable { XCTFail("Metadata has no full-scene receipt") })
+        await gate.release()
+        do { try await boundedSaveTestValue(delayed); XCTFail("Delayed full ticket is stale") }
+        catch is CancellationError { }
+        XCTAssertTrue(captures.hasPendingSave)
+        XCTAssertTrue(captures.hasPendingFullContent)
+        let pending = await files.pendingContent(at: url, session: owner.saveSession)
+        XCTAssertNil(pending, "The full obligation exists before materialized bytes enter the writer")
+        let fresh = captures.capture(owner: owner)
+        do {
+            try await files.save(latestScene, to: url, session: owner.saveSession, capture: fresh) { _, _, _ in throw CocoaError(.fileWriteNoPermission) }
+            XCTFail("Failure must retain full content intent")
+        } catch is ExternalFileSaveFailure { }
+        XCTAssertTrue(captures.hasPendingFullContent)
+        try await files.retry(at: url, session: owner.saveSession, writer: ExternalFileWriter.write)
+        XCTAssertTrue(fresh.acknowledgeDurable {})
+        XCTAssertEqual(try Data(contentsOf: url), latestScene)
+        XCTAssertFalse(captures.hasPendingSave)
+        XCTAssertFalse(captures.hasPendingFullContent)
+    }
+
+    func testRetryOfMetadataRetainsFullObligationAndCannotIssueFullReceipt() async throws {
+        let url = try fixture("{\"elements\":[\"old\"],\"appState\":{\"gridSize\":10}}")
+        let files = ExternalFileSaveCoordinator()
+        let captures = CanvasSaveCoordinator()
+        let owner = owner()
+        try await register(files, url, owner)
+        _ = captures.capture(owner: owner)
+        let metadata = captures.capture(owner: owner, intent: .appState)
+        do {
+            try await files.saveAppState(from: Data("{\"appState\":{\"gridSize\":20}}".utf8), to: url, session: owner.saveSession, capture: metadata) { _, _, _ in throw CocoaError(.fileWriteNoPermission) }
+            XCTFail("Metadata writer must fail")
+        } catch is ExternalFileSaveFailure { }
+        try await files.retry(at: url, session: owner.saveSession, writer: ExternalFileWriter.write)
+        XCTAssertTrue(metadata.acknowledgeDurable(coverage: .appState) {})
+        XCTAssertFalse(metadata.acknowledgeDurable {})
+        XCTAssertTrue(captures.hasPendingFullContent)
+        XCTAssertTrue(captures.hasPendingSave)
     }
 
     func testExternalConflictCannotAcknowledgeOrOverwriteEitherVersionOnRetry() async throws {
@@ -310,44 +370,4 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
             XCTFail("A changed owner cannot export the previous scene")
         } catch is CancellationError { }
     }
-}
-
-private actor SaveCaptureGate {
-    private nonisolated let entered = XCTestExpectation(description: "Capture or writer paused")
-    private var released = false
-
-    func pause() async throws {
-        entered.fulfill()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !released {
-            guard ContinuousClock.now < deadline else { throw CocoaError(.userCancelled) }
-            try await Task.sleep(for: .milliseconds(1))
-        }
-    }
-
-    nonisolated func waitUntilPaused() async {
-        let result = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
-        XCTAssertEqual(result, .completed)
-    }
-
-    func release() { released = true }
-}
-
-private actor InFlightReceiptGate {
-    private nonisolated let entered = XCTestExpectation(description: "In-flight operation entered")
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func pause() async {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            entered.fulfill()
-        }
-    }
-
-    nonisolated func waitUntilPaused() async {
-        let result = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
-        XCTAssertEqual(result, .completed)
-    }
-
-    func release() { continuation?.resume(); continuation = nil }
 }

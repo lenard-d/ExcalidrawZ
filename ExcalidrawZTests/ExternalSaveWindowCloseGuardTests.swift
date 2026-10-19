@@ -22,101 +22,90 @@ final class ExternalSaveWindowCloseGuardTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedSaveKeepsWindowAliveAndRetryCanClose() async {
+    func testFailedSaveKeepsWindowAliveAndRetryCanClose() async throws {
         let decision = ExternalSaveWindowCloseDecision()
         let window = Window()
         var closes = 0
         window.onFlush = { false }
-        await decision.requestClose(participant: window, originalShouldClose: { XCTFail("Failed saves must not reach original delegate"); return true }, close: { closes += 1 }).value
+        try await boundedSaveTestValue(decision.requestClose(participant: window, originalShouldClose: { XCTFail("Failed saves must not reach original delegate"); return true }, close: { closes += 1 }))
         XCTAssertEqual(closes, 0)
         window.onFlush = { window.hasPendingExternalSnapshot = false; return true }
-        await decision.requestClose(participant: window, originalShouldClose: { true }, close: { closes += 1 }).value
+        try await boundedSaveTestValue(decision.requestClose(participant: window, originalShouldClose: { true }, close: { closes += 1 }))
         XCTAssertEqual(closes, 1)
     }
 
     @MainActor
-    func testRepeatedCloseWaitsOnceAndClosesOnlyItsWindow() async {
+    func testRepeatedCloseWaitsOnceAndClosesOnlyItsWindow() async throws {
         let first = Window()
         let second = Window()
         let firstDecision = ExternalSaveWindowCloseDecision()
         let secondDecision = ExternalSaveWindowCloseDecision()
-        let gate = CloseFlushGate()
-        first.onFlush = { await gate.pause(); first.hasPendingExternalSnapshot = false; return true }
+        let gate = SaveTestGate()
+        first.onFlush = {
+            do { try await gate.pause() } catch { return false }
+            first.hasPendingExternalSnapshot = false
+            return true
+        }
         second.onFlush = { false }
         var firstCloses = 0
         var secondCloses = 0
         let initial = firstDecision.requestClose(participant: first, originalShouldClose: { true }, close: { firstCloses += 1 })
-        await gate.waitUntilPaused()
+        try await gate.waitUntilPaused()
         let repeated = firstDecision.requestClose(participant: first, originalShouldClose: { true }, close: { XCTFail("The duplicate must use the original request") })
-        await secondDecision.requestClose(participant: second, originalShouldClose: { true }, close: { secondCloses += 1 }).value
+        try await boundedSaveTestValue(secondDecision.requestClose(participant: second, originalShouldClose: { true }, close: { secondCloses += 1 }))
         XCTAssertEqual(first.flushCount, 1)
         XCTAssertEqual(secondCloses, 0)
         await gate.release()
-        await initial.value
-        await repeated.value
+        try await boundedSaveTestValue(initial)
+        try await boundedSaveTestValue(repeated)
         XCTAssertEqual(firstCloses, 1)
         XCTAssertEqual(secondCloses, 0)
     }
 
     @MainActor
-    func testNewEditDuringFlushVetoesCloseEvenIfFlushReturnsSuccess() async {
+    func testNewEditDuringFlushVetoesCloseEvenIfFlushReturnsSuccess() async throws {
         let decision = ExternalSaveWindowCloseDecision()
         let window = Window()
         window.onFlush = { window.revision += 1; window.hasPendingExternalSnapshot = false; return true }
-        await decision.requestClose(participant: window, originalShouldClose: { XCTFail("Changed edit token must veto first"); return true }, close: { XCTFail("A new edit must retain the editor") }).value
+        try await boundedSaveTestValue(decision.requestClose(participant: window, originalShouldClose: { XCTFail("Changed edit token must veto first"); return true }, close: { XCTFail("A new edit must retain the editor") }))
     }
 
     @MainActor
-    func testOriginalDelegateCanVetoAfterSuccessfulFlush() async {
+    func testOriginalDelegateCanVetoAfterSuccessfulFlush() async throws {
         let decision = ExternalSaveWindowCloseDecision()
         let window = Window()
         window.onFlush = { window.hasPendingExternalSnapshot = false; return true }
         var originalCalls = 0
-        await decision.requestClose(participant: window, originalShouldClose: { originalCalls += 1; return false }, close: { XCTFail("The original delegate veto must be preserved") }).value
+        try await boundedSaveTestValue(decision.requestClose(participant: window, originalShouldClose: { originalCalls += 1; return false }, close: { XCTFail("The original delegate veto must be preserved") }))
         XCTAssertEqual(originalCalls, 1)
     }
 
     @MainActor
-    func testOriginalDelegateCannotIntroduceUnsavedEditThenClose() async {
+    func testOriginalDelegateCannotIntroduceUnsavedEditThenClose() async throws {
         let decision = ExternalSaveWindowCloseDecision()
         let window = Window()
         window.onFlush = { window.hasPendingExternalSnapshot = false; return true }
-        await decision.requestClose(participant: window, originalShouldClose: {
+        try await boundedSaveTestValue(decision.requestClose(participant: window, originalShouldClose: {
             window.revision += 1
             window.hasPendingExternalSnapshot = true
             return true
-        }, close: { XCTFail("The final close must still validate edits made by the original delegate") }).value
+        }, close: { XCTFail("The final close must still validate edits made by the original delegate") }))
     }
 
     @MainActor
-    func testCancellationDoesNotCloseAfterInFlightFlushFinishes() async {
+    func testCancellationDoesNotCloseAfterInFlightFlushFinishes() async throws {
         let decision = ExternalSaveWindowCloseDecision()
         let window = Window()
-        let gate = CloseFlushGate()
-        window.onFlush = { await gate.pause(); window.hasPendingExternalSnapshot = false; return true }
+        let gate = SaveTestGate()
+        window.onFlush = {
+            do { try await gate.pause() } catch { return false }
+            window.hasPendingExternalSnapshot = false
+            return true
+        }
         let request = decision.requestClose(participant: window, originalShouldClose: { true }, close: { XCTFail("A cancelled or detached request must not close") })
-        await gate.waitUntilPaused()
+        try await gate.waitUntilPaused()
         decision.cancel()
         await gate.release()
-        await request.value
+        try await boundedSaveTestValue(request)
     }
-}
-
-private actor CloseFlushGate {
-    private nonisolated let entered = XCTestExpectation(description: "Window flush started")
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func pause() async {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            entered.fulfill()
-        }
-    }
-
-    nonisolated func waitUntilPaused() async {
-        let result = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
-        XCTAssertEqual(result, .completed)
-    }
-
-    func release() { continuation?.resume(); continuation = nil }
 }

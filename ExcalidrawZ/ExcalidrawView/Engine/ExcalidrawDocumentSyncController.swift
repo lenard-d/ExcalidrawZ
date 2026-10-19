@@ -375,7 +375,9 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
         guard beginReceivedStateChanged(isCoreLoading: core.isLoading, hasDirtyChanges: isDirty) == nil else {
             return nil
         }
-        return StateChangedAdmission(capture: isDirty ? core.parent?.fileState.captureCanvasSave() : nil)
+        let intent: CanvasSaveCoverage = data.fileData != nil || data.metadata?.shouldPullContentSnapshot == true
+            ? .fullScene : .appState
+        return StateChangedAdmission(capture: isDirty ? core.parent?.fileState.captureCanvasSave(intent: intent) : nil)
     }
 
     @MainActor
@@ -460,19 +462,6 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
                 await fileState.reportExternalSaveFailure(error, at: url)
             }
         }
-    }
-
-    @MainActor
-    func flushPendingDirtySnapshotInBackground(
-        reason: String,
-        expectedFileID: String,
-        target: FileState.CapturedCanvasSaveTarget
-    ) async {
-        await snapshotCoordinator.flushPendingDirtySnapshotInBackground(
-            reason: reason,
-            expectedFileID: expectedFileID,
-            target: target
-        )
     }
 
     func flushPendingDirtySnapshotToCapturedTarget(
