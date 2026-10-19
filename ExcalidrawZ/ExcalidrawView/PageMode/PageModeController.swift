@@ -68,6 +68,10 @@ final class PageModeController: ObservableObject {
         errorMessage = nil
     }
 
+    func invalidateIfNeeded() {
+        if !isCurrent() { invalidate() }
+    }
+
     private func beginAction() -> Bool {
         guard !isBusy, isValid else { return false }
         guard isCurrent() else {
