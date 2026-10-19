@@ -65,7 +65,11 @@ final class FileCoverCacheCoordinator: ObservableObject {
     struct CheckpointPreviewSource {
         let objectID: NSManagedObjectID
         let cacheID: String
+        let fileObjectID: NSManagedObjectID?
     }
+
+    // Keep every requested version until access is revoked, including warm-cache hits.
+    private var checkpointPreviewSources: [String: CheckpointPreviewSource] = [:]
 
     private struct Job {
         let source: Source
@@ -512,11 +516,22 @@ final class FileCoverCacheCoordinator: ObservableObject {
         priority: Priority = .background,
         forceRefresh: Bool = false
     ) {
+        let checkpointSource = CheckpointPreviewSource(
+            objectID: checkpoint.objectID,
+            cacheID: Self.checkpointPreviewID(for: checkpoint),
+            fileObjectID: (checkpoint as? FileCheckpoint)?.file?.objectID
+        )
+        if checkpointSource.fileObjectID != nil {
+            checkpointPreviewSources[checkpointSource.cacheID] = checkpointSource
+        }
+        let source = Source.checkpoint(checkpointSource)
+        guard !shouldSkipLockedSource(source) else {
+            invalidatePreview(forID: checkpointSource.cacheID)
+            return
+        }
+
         request(
-            source: .checkpoint(.init(
-                objectID: checkpoint.objectID,
-                cacheID: Self.checkpointPreviewID(for: checkpoint)
-            )),
+            source: source,
             colorScheme: colorScheme,
             priority: priority,
             forceRefresh: forceRefresh
@@ -581,6 +596,13 @@ final class FileCoverCacheCoordinator: ObservableObject {
 
     func refreshLibraryCoversForLockStateChange(colorScheme: ColorScheme) {
         currentColorScheme = colorScheme
+        let inaccessibleCheckpointIDs = checkpointPreviewSources.values
+            .filter { shouldSkipLockedSource(.checkpoint($0)) }
+            .map(\.cacheID)
+        for previewID in inaccessibleCheckpointIDs {
+            invalidatePreview(forID: previewID)
+        }
+
         guard let context,
               let lockedContentState else {
             return
@@ -807,6 +829,17 @@ final class FileCoverCacheCoordinator: ObservableObject {
     }
 
     private func shouldSkipLockedSource(_ source: Source) -> Bool {
+        if case .checkpoint(let checkpointSource) = source {
+            guard let fileObjectID = checkpointSource.fileObjectID else { return false }
+            guard let context,
+                  let file = try? context.existingObject(with: fileObjectID) as? File,
+                  !file.isDeleted,
+                  let state = lockedContentState?.previewLockState(for: .file(file)) else {
+                return true
+            }
+            return state == .locked
+        }
+
         guard case .activeFile(let activeFile) = source,
               case .file = activeFile,
               let lockState = lockedContentState?.previewLockState(for: activeFile) else {
@@ -1054,6 +1087,7 @@ final class FileCoverCacheCoordinator: ObservableObject {
     }
 
     private func invalidatePreview(forID fileID: String) {
+        checkpointPreviewSources.removeValue(forKey: fileID)
         for colorScheme in [ColorScheme.light, .dark] {
             let cacheKey = FileItemPreviewCache.cacheKey(
                 forID: fileID,

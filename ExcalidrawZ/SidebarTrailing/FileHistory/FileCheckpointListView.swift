@@ -23,7 +23,11 @@ struct FileHistoryInspectorContent: View {
     private func contentView(presentation: FileCheckpointListPresentation) -> some View {
         switch fileState.currentActiveFile {
             case .file(let file):
-                FileCheckpointListView(file: file, presentation: presentation)
+                FilePreviewLockStateReader(file: .file(file)) { lockState in
+                    if let lockState, lockState != .locked {
+                        FileCheckpointListView(file: file, presentation: presentation)
+                    }
+                }
             case .localFile(let url):
                 FileCheckpointListView(localFile: url, presentation: presentation)
             case .temporaryFile(let url):
