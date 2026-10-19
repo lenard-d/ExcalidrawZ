@@ -202,13 +202,10 @@ extension LocalFolder {
                 )
             },
             directoryContents: { url in
-                guard let contents = try materializedDirectoryContents(
-                    at: url,
-                    includingPropertiesForKeys: [.nameKey, .isHiddenKey]
-                ) else { throw LinkedFolderRefresh.DirectoryNotReady() }
-                return contents.filter {
-                    $0.isDirectory && (try? $0.resourceValues(forKeys: [.isHiddenKey]))?.isHidden == false
+                guard let contents = try visibleDirectoryContents(at: url) else {
+                    throw LinkedFolderRefresh.DirectoryNotReady()
                 }
+                return contents
             }
         )
     }
@@ -424,6 +421,16 @@ extension LocalFolder {
             && values?.ubiquitousItemDownloadingStatus == .notDownloaded
     }
 
+    private static func visibleDirectoryContents(at url: URL) throws -> [URL]? {
+        try Task.checkCancellation()
+        guard let contents = try materializedDirectoryContents(
+            at: url,
+            includingPropertiesForKeys: Array(ExternalFolderDirectoryScanner.resourceKeys)
+        ) else { return nil }
+        return try ExternalFolderDirectoryScanner(contents: { _ in contents })
+            .visibleSubdirectories(at: url)
+    }
+
     /// Returns nil while a File Provider-backed directory is still being
     /// materialized. Callers must preserve their current UI or Core Data tree
     /// instead of interpreting that state as an empty directory.
@@ -628,19 +635,14 @@ extension LocalFolder {
     ) throws {
         try refreshResolvedLocation(context: context)
         try self.withSecurityScopedURL { url in
-            guard let contents = try Self.materializedDirectoryContents(
-                at: url,
-                includingPropertiesForKeys: [.nameKey, .isHiddenKey]
-            ) else { return }
+            guard let contents = try Self.visibleDirectoryContents(at: url) else { return }
             try context.performAndWait {
                 let fetchRequest = NSFetchRequest<LocalFolder>(entityName: "LocalFolder")
                 fetchRequest.predicate = NSPredicate(format: "parent = %@", self)
                 let childeren = try context.fetch(fetchRequest)
                 /// Children folders that should be deleted
                 var missingChidren = childeren
-                for url in contents.filter({
-                    $0.isDirectory && (try? $0.resourceValues(forKeys: [.isHiddenKey]))?.isHidden == false
-                }) {
+                for url in contents {
                     /// If found, remove from `missingChidren`
                     if let index = missingChidren.firstIndex(where: {$0.url == url}) {
                         missingChidren.remove(at: index)
