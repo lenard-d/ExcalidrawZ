@@ -45,6 +45,7 @@ enum PageModeSceneScript {
         excalidrawZPage: { ...metadata(page), version: 1, order: index },
     });
     const capture = { captureUpdate: "IMMEDIATELY" };
+    const cameraOptions = { animate: false, canvasOffsets: { top: 40, right: 40, bottom: 40, left: 40 } };
     // Keep the live objects intact until updateScene captures the undo change.
     const updatePages = patches => {
         const updates = new Map(patches.map(patch => [patch.id, patch.updates]));
@@ -118,11 +119,11 @@ enum PageModeSceneScript {
         }
         case "open": {
             const page = getPage();
-            helper.zoomToFitElements([page.id], { padding: 40 });
+            helper.zoomToFitElements([page.id], cameraOptions);
             return state(page.id);
         }
         case "canvas":
-            helper.zoomToFit({ padding: 40 });
+            helper.zoomToFit(cameraOptions);
             return state(null);
         case "exportScene":
             return JSON.stringify({
