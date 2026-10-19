@@ -15,6 +15,35 @@ private let fileCheckpointRowLogger = Logger(label: "FileCheckpointRowView")
 struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
     @ObservedObject var checkpoint: Checkpoint
     var presentsDetail = true
+
+    var body: some View {
+        FileCheckpointAccessView(checkpoint: checkpoint) {
+            FileCheckpointUnlockedRow(checkpoint: checkpoint, presentsDetail: presentsDetail)
+        }
+    }
+}
+
+/// Removing the child on relock releases its decrypted row and detail state.
+private struct FileCheckpointAccessView<Checkpoint: FileCheckpointRepresentable, Content: View>: View {
+    @ObservedObject var checkpoint: Checkpoint
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        if let file = (checkpoint as? FileCheckpoint)?.file {
+            FilePreviewLockStateReader(file: .file(file)) { lockState in
+                if let lockState, lockState != .locked {
+                    content()
+                }
+            }
+        } else {
+            content()
+        }
+    }
+}
+
+private struct FileCheckpointUnlockedRow<Checkpoint: FileCheckpointRepresentable>: View {
+    @ObservedObject var checkpoint: Checkpoint
+    var presentsDetail: Bool
     
     @State private var metadata: FileCheckpointMetadata?
     
@@ -50,14 +79,18 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
         } else {
 #if os(iOS)
             NavigationLink {
-                FileCheckpointDetailView(checkpoint: checkpoint)
+                FileCheckpointAccessView(checkpoint: checkpoint) {
+                    FileCheckpointDetailView(checkpoint: checkpoint)
+                }
             } label: {
                 label()
             }
             .buttonStyle(.plain)
 #elseif os(macOS)
             Popover(arrowEdge: .trailing) {
-                FileCheckpointDetailView(checkpoint: checkpoint)
+                FileCheckpointAccessView(checkpoint: checkpoint) {
+                    FileCheckpointDetailView(checkpoint: checkpoint)
+                }
             } label: {
                 label()
             }
