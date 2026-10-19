@@ -80,19 +80,19 @@ struct ExcalidrawToolbar: View {
             .excalidrawToolbarSurface(.circle)
 #endif
         ExcalidrawToolbarToolContainer { sizeClass in
-            let pickerItems = toolOrder.pickerItems(for: sizeClass)
+            let presentation = ExcalidrawToolbarToolPresentation(order: toolOrder)
+            let pickerItems = presentation.pickerItems(for: sizeClass)
             
             HStack(spacing: 10) {
                 ZStack {
                     Color.clear
                     if sizeClass == .dense {
-                        denseContent(toolOrder.tools)
+                        denseContent(presentation.items)
                     } else {
                         segmentedPicker(
                             sizeClass: sizeClass,
                             primaryPickerItems: pickerItems.primary,
-                            secondaryPickerItems: pickerItems.secondary,
-                            toolOrder: toolOrder
+                            secondaryPickerItems: pickerItems.secondary
                         )
                     }
                 }
@@ -151,9 +151,8 @@ struct ExcalidrawToolbar: View {
     @ViewBuilder
     private func segmentedPicker(
         sizeClass: ExcalidrawToolbarToolSizeClass,
-        primaryPickerItems: [ExcalidrawTool],
-        secondaryPickerItems: [ExcalidrawTool],
-        toolOrder: ExcalidrawToolbarToolOrder,
+        primaryPickerItems: [ExcalidrawToolbarToolPresentation.Item],
+        secondaryPickerItems: [ExcalidrawToolbarToolPresentation.Item],
         size: CGFloat = 20,
         withFooter: Bool = true
     ) -> some View {
@@ -162,8 +161,7 @@ struct ExcalidrawToolbar: View {
                 primaryToolPikcerItems(
                     primaryPickerItems,
                     size: size,
-                    withFooter: withFooter,
-                    toolOrder: toolOrder
+                    withFooter: withFooter
                 )
             }
             .padding({
@@ -194,11 +192,11 @@ struct ExcalidrawToolbar: View {
                 .buttonStyle(.borderless)
                 .padding(size / 3)
                 .background {
-                    let isSelected = toolState.activatedTool != nil && secondaryPickerItems.contains(toolState.activatedTool!)
+                    let isSelected = toolState.activatedTool != nil && secondaryPickerItems.map(\.tool).contains(toolState.activatedTool!)
                     secondaryPickerBackground(size: size, isSelected: isSelected)
                 }
                 .watch(value: toolState.activatedTool) { newValue in
-                    if let newValue, secondaryPickerItems.contains(newValue) {
+                    if let newValue, secondaryPickerItems.map(\.tool).contains(newValue) {
                         lastActivatedSecondaryTool = newValue
                     }
                 }
@@ -256,7 +254,7 @@ struct ExcalidrawToolbar: View {
     @ViewBuilder
     private func secondaryPickerItemsMenu(
         tool: ExcalidrawTool,
-        secondaryPickerItems: [ExcalidrawTool],
+        secondaryPickerItems: [ExcalidrawToolbarToolPresentation.Item],
         size: CGFloat = 20,
     ) -> some View {
 #if os(iOS)
@@ -268,7 +266,7 @@ struct ExcalidrawToolbar: View {
                 size: size
             )
             .foregroundStyle(
-                toolState.activatedTool != nil && secondaryPickerItems.contains(toolState.activatedTool!)
+                toolState.activatedTool != nil && secondaryPickerItems.map(\.tool).contains(toolState.activatedTool!)
                 ? AnyShapeStyle(Color.accentColor)
                 : AnyShapeStyle(HierarchicalShapeStyle.primary)
             )
@@ -281,26 +279,26 @@ struct ExcalidrawToolbar: View {
         } label: {
             SegmentedToolPickerItemView(
                 tool: {
-                    if let lastActivatedSecondaryTool, secondaryPickerItems.contains(lastActivatedSecondaryTool) {
+                    if let lastActivatedSecondaryTool, secondaryPickerItems.map(\.tool).contains(lastActivatedSecondaryTool) {
                         return lastActivatedSecondaryTool
                     } else {
-                        return (secondaryPickerItems.contains(tool) ? tool : secondaryPickerItems.first!)
+                        return (secondaryPickerItems.map(\.tool).contains(tool) ? tool : secondaryPickerItems.first!.tool)
                     }
                 }(),
                 size: size,
                 withFooter: false
             )
             .foregroundStyle(
-                toolState.activatedTool != nil && secondaryPickerItems.contains(toolState.activatedTool!)
+                toolState.activatedTool != nil && secondaryPickerItems.map(\.tool).contains(toolState.activatedTool!)
                 ? AnyShapeStyle(Color.accentColor)
                 : AnyShapeStyle(HierarchicalShapeStyle.primary)
             )
         } primaryAction: {
             if let lastActivatedSecondaryTool,
-               secondaryPickerItems.contains(lastActivatedSecondaryTool) {
+               secondaryPickerItems.map(\.tool).contains(lastActivatedSecondaryTool) {
                 toolState.setActivedTool(lastActivatedSecondaryTool)
             } else {
-                toolState.setActivedTool(secondaryPickerItems.first)
+                toolState.setActivedTool(secondaryPickerItems.first?.tool)
             }
         }
         .menuIndicator(.visible)
@@ -308,23 +306,23 @@ struct ExcalidrawToolbar: View {
     }
     
     @ViewBuilder
-    private func secondaryPickerItemsPicker(_ secondaryPickerItems: [ExcalidrawTool]) -> some View {
+    private func secondaryPickerItemsPicker(_ secondaryPickerItems: [ExcalidrawToolbarToolPresentation.Item]) -> some View {
         Picker(selection: $toolState.activatedTool) {
-            ForEach(secondaryPickerItems, id: \.self) { tool in
-                densePickerItems(tool: tool)
-                    .tag(tool)
+            ForEach(secondaryPickerItems) { item in
+                densePickerItems(item: item)
+                    .tag(item.tool)
             }
         } label: { }
             .pickerStyle(.inline)
     }
     
     @ViewBuilder
-    private func denseContent(_ toolbarTools: [ExcalidrawTool]) -> some View {
+    private func denseContent(_ toolbarTools: [ExcalidrawToolbarToolPresentation.Item]) -> some View {
         HStack {
             Picker(selection: $toolState.activatedTool) {
-                ForEach(toolbarTools, id: \.self) { tool in
-                    densePickerItems(tool: tool)
-                        .tag(tool)
+                ForEach(toolbarTools) { item in
+                    densePickerItems(item: item)
+                        .tag(item.tool)
                 }
             } label: {
                 Text(.localizable(.toolbarActiveToolTitle))
@@ -336,11 +334,11 @@ struct ExcalidrawToolbar: View {
 
     @ViewBuilder
     private func secondaryPickerItemsMenuLabel(
-        secondaryPickerItems: [ExcalidrawTool],
+        secondaryPickerItems: [ExcalidrawToolbarToolPresentation.Item],
         size: CGFloat
     ) -> some View {
         if let tool = toolState.activatedTool,
-           secondaryPickerItems.contains(tool) {
+           secondaryPickerItems.map(\.tool).contains(tool) {
             SegmentedToolPickerItemView(
                 tool: tool,
                 size: size,
@@ -358,20 +356,18 @@ struct ExcalidrawToolbar: View {
     
     @ViewBuilder
     private func primaryToolPikcerItems(
-        _ primaryPickerItems: [ExcalidrawTool],
+        _ primaryPickerItems: [ExcalidrawToolbarToolPresentation.Item],
         size: CGFloat,
-        withFooter: Bool,
-        toolOrder: ExcalidrawToolbarToolOrder
+        withFooter: Bool
     ) -> some View {
-        ForEach(primaryPickerItems, id: \.self) { tool in
-            let shortcutLabel = toolOrder.shortcutLabel(for: tool)
+        ForEach(primaryPickerItems) { item in
             toolPickerItemView(
-                tool: tool,
+                tool: item.tool,
                 size: size,
                 withFooter: withFooter,
-                shortcutLabel: shortcutLabel
+                shortcutLabel: item.shortcutLabel
             )
-                .tag(tool)
+                .tag(item.tool)
         }
     }
     
@@ -680,57 +676,39 @@ struct ExcalidrawToolbar: View {
     }
     
     @ViewBuilder
-    private func densePickerItems(tool: ExcalidrawTool) -> some View {
-        Text(tool.localization)
-    }
-
-    private func compactShapeAndToolMenuTools(
-        toolOrder: ExcalidrawToolbarToolOrder
-    ) -> [ExcalidrawTool] {
-        toolOrder.tools.filter { tool in
-            switch tool {
-                case .cursor, .freedraw, .hand, .lasso:
-                    false
-                default:
-                    true
-            }
-        }
+    private func densePickerItems(item: ExcalidrawToolbarToolPresentation.Item) -> some View {
+        Text(item.menuTitle(localizedName: item.tool.localization))
     }
 
     @ViewBuilder
     private func compactShapeAndToolMenuItems(
         toolOrder: ExcalidrawToolbarToolOrder
     ) -> some View {
-        ForEach(compactShapeAndToolMenuTools(toolOrder: toolOrder), id: \.self) { tool in
-            compactShapeAndToolMenuButton(tool)
+        ForEach(ExcalidrawToolbarToolPresentation(order: toolOrder).compactItems) { item in
+            Button {
+                toolState.setActivedTool(item.tool)
+            } label: {
+                toolMenuLabel(item)
+            }
         }
     }
 
     @ViewBuilder
-    private func compactShapeAndToolMenuButton(_ tool: ExcalidrawTool) -> some View {
-        Button {
-            toolState.setActivedTool(tool)
-        } label: {
-            toolMenuLabel(tool)
-        }
-    }
-    
-    @ViewBuilder
     private func activeShape() -> some View {
         if let tool = toolState.activatedTool,
            tool != .cursor {
-            toolMenuLabel(tool)
+            toolMenuLabel(.init(tool: tool, shortcutLabel: nil))
         } else {
             Label(.localizable(.toolbarShapes), systemSymbol: .squareOnCircle)
         }
     }
 
     @ViewBuilder
-    private func toolMenuLabel(_ tool: ExcalidrawTool) -> some View {
+    private func toolMenuLabel(_ item: ExcalidrawToolbarToolPresentation.Item) -> some View {
         Label {
-            Text(tool.localization)
+            Text(item.menuTitle(localizedName: item.tool.localization))
         } icon: {
-            Image(systemSymbol: tool.menuSystemSymbol)
+            Image(systemSymbol: item.tool.menuSystemSymbol)
         }
     }
     
