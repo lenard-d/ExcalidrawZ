@@ -339,7 +339,7 @@ private struct TemporaryFileBrowseRow: View {
         .modifier(TemporaryFileContextMenuModifier(file: file))
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button {
-                TemporaryFileActions.close([file], fileState: fileState)
+                Task { await TemporaryFileActions.close([file], fileState: fileState) }
             } label: {
                 Label(
                     .localizable(.sidebarTemporaryFileRowContextMenuCloseFile),
