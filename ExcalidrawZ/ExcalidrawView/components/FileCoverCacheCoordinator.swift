@@ -70,6 +70,22 @@ final class FileCoverCacheCoordinator: ObservableObject {
 
     // Keep every requested version until access is revoked, including warm-cache hits.
     private var checkpointPreviewSources: [String: CheckpointPreviewSource] = [:]
+    private var exportPNG: (@MainActor (ExcalidrawFile, ColorScheme) async throws -> Data)?
+
+    convenience init(
+        fileState: FileState, lockedContentState: LockedContentStateStore,
+        context: NSManagedObjectContext,
+        exportPNG: @escaping @MainActor (ExcalidrawFile, ColorScheme) async throws -> Data
+    ) {
+        self.init()
+        register(fileState: fileState, lockedContentState: lockedContentState, context: context)
+        self.exportPNG = exportPNG
+    }
+
+    func waitForPendingPreviewWork() async {
+        for lookup in Array(diskLookupTasks.values) { await lookup.value }
+        await processingTask?.value
+    }
 
     private struct Job {
         let source: Source
@@ -870,7 +886,8 @@ final class FileCoverCacheCoordinator: ObservableObject {
     }
 
     private func generate(_ job: Job) async -> GenerationResult {
-        guard let coordinator = await waitForPreviewExporter() else {
+        let coordinator = exportPNG == nil ? await waitForPreviewExporter() : nil
+        guard coordinator != nil || exportPNG != nil else {
             logger.debug("Preview export coordinator unavailable for \(job.source.id), retry=\(job.retryCount)")
             return .retry
         }
@@ -974,11 +991,17 @@ final class FileCoverCacheCoordinator: ObservableObject {
             let revision = await diskRevision(for: job.source)
             let png: Data
             do {
-                png = try await exportViewportPreview(
-                    for: excalidrawFile,
-                    colorScheme: job.colorScheme,
-                    coordinator: coordinator
-                )
+                if let exportPNG {
+                    png = try await exportPNG(excalidrawFile, job.colorScheme)
+                } else if let coordinator {
+                    png = try await exportViewportPreview(
+                        for: excalidrawFile,
+                        colorScheme: job.colorScheme,
+                        coordinator: coordinator
+                    )
+                } else {
+                    return .retry
+                }
             } catch {
                 guard !Task.isCancelled else { return .completed }
                 logger.debug("Failed to export viewport preview for \(job.source.id): \(error), retry=\(job.retryCount)")
@@ -1094,6 +1117,8 @@ final class FileCoverCacheCoordinator: ObservableObject {
                 colorScheme: colorScheme
             ) as String
             cacheGenerations[cacheKey, default: 0] &+= 1
+            // Discarded work must not block a request in the new generation.
+            inFlightKeys.remove(cacheKey)
             cancelDiskLookup(forKey: cacheKey)
             removeDiskPreview(forKey: cacheKey)
             queue.removeAll { $0.cacheKey == cacheKey }
