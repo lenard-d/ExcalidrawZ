@@ -190,6 +190,11 @@ extension ExcalidrawCore: WKScriptMessageHandler {
                         await self.nativeEyeDropper.request(message.data)
                     }
 
+                case .cancelNativeEyeDropper(let message):
+                    Task { @MainActor in
+                        self.nativeEyeDropper.cancel(requestId: message.data.requestId)
+                    }
+
                 case .currentFileSaveStreamStarted(let message):
                     currentFileSaveStreamBridge.receiveStarted(message.data)
                 case .currentFileSaveStreamChunk(let message):
@@ -574,6 +579,7 @@ extension ExcalidrawCore {
 
         // Native eye dropper
         case requestNativeEyeDropper
+        case cancelNativeEyeDropper
 
         // Current file save stream
         case currentFileSaveStreamStarted
@@ -627,6 +633,7 @@ extension ExcalidrawCore {
 
         // Native eye dropper
         case requestNativeEyeDropper(RequestNativeEyeDropperMessage)
+        case cancelNativeEyeDropper(CancelNativeEyeDropperMessage)
 
         // Current file save stream
         case currentFileSaveStreamStarted(CurrentFileSaveStreamStartedMessage)
@@ -734,6 +741,8 @@ extension ExcalidrawCore {
                 // Native eye dropper
                 case .requestNativeEyeDropper:
                     self = .requestNativeEyeDropper(try RequestNativeEyeDropperMessage(from: decoder))
+                case .cancelNativeEyeDropper:
+                    self = .cancelNativeEyeDropper(try CancelNativeEyeDropperMessage(from: decoder))
 
                 // Current file save stream
                 case .currentFileSaveStreamStarted:
@@ -773,6 +782,11 @@ extension ExcalidrawCore {
     struct RequestNativeEyeDropperMessage: AnyExcalidrawZMessage {
         var event: String
         var data: NativeEyeDropperRequest
+    }
+
+    struct CancelNativeEyeDropperMessage: AnyExcalidrawZMessage {
+        var event: String
+        var data: CancelNativeEyeDropperRequest
     }
 
     struct CurrentFileSaveStreamStartedMessage: AnyExcalidrawZMessage {
