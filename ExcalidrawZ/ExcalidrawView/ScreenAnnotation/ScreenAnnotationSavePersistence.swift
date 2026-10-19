@@ -246,6 +246,17 @@ final class ScreenAnnotationSavePersistence {
         logger.debug(
             "Prepared target file id=\(saveID) durationMs=\(Self.milliseconds(from: prepareStartedAt))"
         )
+        defer {
+            if let session = preparedTarget.saveTarget.saveSessionID {
+                Task {
+                    if let fileState {
+                        await fileState.releaseUnusedExternalSaveSession(session)
+                    } else {
+                        await ExternalFileSaveCoordinator.shared.releaseSession(session)
+                    }
+                }
+            }
+        }
         let existingMediaIDs = Set(preparedTarget.file.files.keys)
 
         try await OffscreenExcalidrawEditor.withEditor { editor in
@@ -265,13 +276,14 @@ final class ScreenAnnotationSavePersistence {
             )
 
             let snapshotStartedAt = Date()
-            let updatedFile = try await editor.snapshot(
+            var updatedFile = try await editor.snapshot(
                 appStatePolicy: .preserveLoadedDocument
             )
             self.logger.debug(
                 "Captured offscreen snapshot id=\(saveID) durationMs=\(Self.milliseconds(from: snapshotStartedAt))"
             )
 
+            updatedFile.id = preparedTarget.activeFile.id
             let persistenceStartedAt = Date()
             try await FileState.persistCapturedCanvasUpdate(
                 preparedTarget.saveTarget,
@@ -283,6 +295,14 @@ final class ScreenAnnotationSavePersistence {
             self.configuration.recordSuccessfulSave(
                 to: preparedTarget.destination
             )
+
+            if let session = preparedTarget.saveTarget.saveSessionID {
+                if let token = preparedTarget.activeSaveToken {
+                    await fileState?.acceptExternalMutation(updatedFile, session: session, expectedToken: token)
+                }
+                FileCoverCacheCoordinator.shared.refreshCover(for: preparedTarget.activeFile)
+                return
+            }
 
             let insertedMediaFiles = updatedFile.files.values.filter {
                 !existingMediaIDs.contains($0.id)
@@ -336,7 +356,7 @@ final class ScreenAnnotationSavePersistence {
                     throw ScreenAnnotationSaveError.targetFileUnavailable
                 }
                 let activeFile = FileState.ActiveFile.file(file)
-                await fileState?
+                try await fileState?
                     .flushPendingCanvasSnapshotBeforeExternalMutation(
                         fileID: activeFile.id
                     )
@@ -374,16 +394,18 @@ final class ScreenAnnotationSavePersistence {
 
             case .localFile(let url):
                 let activeFile = FileState.ActiveFile.localFile(url)
-                await fileState?
+                try await fileState?
                     .flushPendingCanvasSnapshotBeforeExternalMutation(
                         fileID: activeFile.id
                     )
+                let activeSaveToken = fileState?.currentActiveFile?.id == activeFile.id ? fileState?.terminationSaveToken : nil
                 let content = try await FileSyncCoordinator.shared.openFile(url)
                 var excalidrawFile = try ExcalidrawFile(
                     data: content,
                     id: activeFile.id
                 )
                 excalidrawFile.name = activeFile.name
+                let saveSession = try await FileState.registerExternalFileRead(content, at: url)
                 return PreparedScreenAnnotationTarget(
                     activeFile: activeFile,
                     destination: .localFile(url: url),
@@ -394,8 +416,10 @@ final class ScreenAnnotationSavePersistence {
                             url: url,
                             newCheckpoint: true,
                             suppressCheckpoint: false
-                        )
-                    )
+                        ),
+                        saveSessionID: saveSession
+                    ),
+                    activeSaveToken: activeSaveToken
                 )
         }
     }
@@ -415,6 +439,7 @@ private struct PreparedScreenAnnotationTarget {
     var destination: ScreenAnnotationSaveDestination
     var file: ExcalidrawFile
     var saveTarget: FileState.CapturedCanvasSaveTarget
+    var activeSaveToken: ExternalSaveTerminationToken?
 }
 
 private enum ScreenAnnotationSaveError: LocalizedError {

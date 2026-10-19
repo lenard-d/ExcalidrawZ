@@ -68,12 +68,9 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         lock.unlock()
     }
 
-    func recordPendingContentDirtyMetadata(
-        _ metadata: ExcalidrawCore.StateChangedMetadata,
-        currentFileID: String?
-    ) {
-        let expectedFileID = metadata.currentFileId ?? currentFileID
-        let expectedRevision = metadata.revision
+    func recordPendingContentDirty(fileID: String?, revision: Int?) {
+        let expectedFileID = fileID
+        let expectedRevision = revision
 
         lock.lock()
         pendingFileID = expectedFileID
@@ -148,14 +145,17 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         return state
     }
 
-    func waitForCommitToFinish() async {
-        while true {
-            guard !commitIsInFlight() else {
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                continue
+    /// Cancelling a lifecycle wait does not cancel or acknowledge the provider write.
+    func waitForCommitToFinish() async -> Bool {
+        while !Task.isCancelled {
+            guard commitIsInFlight() else { return true }
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return false
             }
-            return
         }
+        return false
     }
 
     func markCommitted(

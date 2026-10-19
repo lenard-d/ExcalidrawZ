@@ -15,8 +15,13 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
     private var commitTask: Task<Void, Never>?
     private var latestAppState: ExcalidrawCore.JSONValue?
     private var latestAppStateFileID: String?
+    private var appStateRevision: UInt64 = 0
 
     private let trailingDebounceNanoseconds: UInt64 = 2_000_000_000
+
+    var hasPendingSave: Bool {
+        lock.withLock { latestAppStateFileID != nil && latestAppState != nil }
+    }
 
     func attach(delegate: ExcalidrawDocumentSnapshotCoordinatorDelegate) {
         self.delegate = delegate
@@ -33,6 +38,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         }
 
         lock.lock()
+        appStateRevision &+= 1
         latestAppState = appState
         lock.unlock()
     }
@@ -92,21 +98,25 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 into: capturedContent,
                 nativeFileName: nativeFileName(for: target)
             ) else {
+                acknowledge(commitState.revision)
                 return
             }
-            await FileState.saveCapturedAppStateOnlyUpdate(
+            try await FileState.saveCapturedAppStateOnlyUpdate(
                 target,
                 content: contentWithAppState
             )
+            acknowledge(commitState.revision)
             core.logger.debug("Committed background appState-only canvas update: \(reason) id=\(expectedFileID)")
         } catch {
             core.logger.error("Failed to apply background appState-only canvas update: \(error)")
+            await reportExternalFailure(error, core: core)
             core.publishError(error)
         }
     }
 
     func flushCurrentAppState(reason: String) async -> Bool {
         cancelScheduledCommit()
+        let revision = lock.withLock { appStateRevision }
         guard let core = delegate?.snapshotCoordinatorCore else { return false }
 
         do {
@@ -147,22 +157,22 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 into: content,
                 nativeFileName: state.fileName
             ) else {
-                clear()
+                acknowledge(revision)
                 return true
             }
-            await MainActor.run {
-                core.parent?.fileState.updateAppStateOnlyForCurrentFile(
-                    expectedFileID: expectedFileID,
-                    content: contentWithAppState
-                )
-            }
-            clear()
+            let fileState = await MainActor.run { core.parent?.fileState }
+            try await fileState?.updateAppStateOnlyForCurrentFile(
+                expectedFileID: expectedFileID,
+                content: contentWithAppState
+            )
+            acknowledge(revision)
             core.logger.debug("Committed forced appState-only canvas update: \(reason) id=\(expectedFileID)")
             return true
         } catch is CancellationError {
             return false
         } catch {
             core.logger.error("Failed to apply forced appState-only canvas update: \(error)")
+            await reportExternalFailure(error, core: core)
             core.publishError(error)
             return false
         }
@@ -175,6 +185,7 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         capturedContent: Data?
     ) async -> Bool {
         cancelScheduledCommit()
+        let revision = lock.withLock { appStateRevision }
         guard let core = delegate?.snapshotCoordinatorCore,
               let capturedContent else {
             return false
@@ -203,20 +214,21 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 into: capturedContent,
                 nativeFileName: nativeFileName(for: target)
             ) else {
-                clear()
+                acknowledge(revision)
                 return true
             }
-            await FileState.saveCapturedAppStateOnlyUpdate(
+            try await FileState.saveCapturedAppStateOnlyUpdate(
                 target,
                 content: contentWithAppState
             )
-            clear()
+            acknowledge(revision)
             core.logger.debug("Committed forced background appState-only canvas update: \(reason) id=\(expectedFileID)")
             return true
         } catch is CancellationError {
             return false
         } catch {
             core.logger.error("Failed to apply forced background appState-only canvas update: \(error)")
+            await reportExternalFailure(error, core: core)
             core.publishError(error)
             return false
         }
@@ -280,17 +292,32 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 into: content,
                 nativeFileName: state.fileName
             ) else {
+                acknowledge(commitState.revision)
                 return
             }
-            await MainActor.run {
-                core.parent?.fileState.updateAppStateOnlyForCurrentFile(
-                    expectedFileID: expectedFileID,
-                    content: contentWithAppState
-                )
-            }
+            let fileState = await MainActor.run { core.parent?.fileState }
+            try await fileState?.updateAppStateOnlyForCurrentFile(
+                expectedFileID: expectedFileID,
+                content: contentWithAppState
+            )
+            acknowledge(commitState.revision)
         } catch {
             core.logger.error("Failed to apply appState-only canvas update: \(error)")
+            await reportExternalFailure(error, core: core)
             core.publishError(error)
+        }
+    }
+
+    private func reportExternalFailure(_ error: Error, core: ExcalidrawCore) async {
+        await MainActor.run {
+            guard let fileState = core.parent?.fileState,
+                  let activeFile = fileState.currentActiveFile else { return }
+            switch activeFile {
+                case .localFile(let url), .temporaryFile(let url):
+                    fileState.reportExternalSaveFailure(error, at: url)
+                default:
+                    break
+            }
         }
     }
 
@@ -303,14 +330,23 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
 
     private func takePendingCommitState() -> (
         expectedFileID: String?,
-        appState: ExcalidrawCore.JSONValue?
+        appState: ExcalidrawCore.JSONValue?,
+        revision: UInt64
     ) {
         lock.lock()
         let fileID = latestAppStateFileID
         let appState = latestAppState
-        clearLocked(cancelTask: false)
+        let revision = appStateRevision
         lock.unlock()
-        return (fileID, appState)
+        return (fileID, appState, revision)
+    }
+
+    private func acknowledge(_ revision: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if revision == appStateRevision {
+            clearLocked(cancelTask: false)
+        }
     }
 
     private func appStateForPersistence(
@@ -395,7 +431,9 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         into content: Data,
         nativeFileName: String?
     ) throws -> Data? {
-        let appStateData = try JSONEncoder().encode(appState)
+        let fields: [String: ExcalidrawCore.JSONValue]
+        if case .object(let object) = appState { fields = object } else { fields = [:] }
+        let appStateData = try ExcalidrawDocumentAppStatePersistence.appStateOnlyPersistentData(from: fields)
         let appStateObject = try JSONSerialization.jsonObject(with: appStateData)
         guard var contentObject = try JSONSerialization.jsonObject(with: content) as? [String: Any] else {
             return content
@@ -425,7 +463,9 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
         _ appState: ExcalidrawCore.JSONValue,
         in content: Data
     ) throws -> [String] {
-        let appStateData = try JSONEncoder().encode(appState)
+        let fields: [String: ExcalidrawCore.JSONValue]
+        if case .object(let object) = appState { fields = object } else { fields = [:] }
+        let appStateData = try ExcalidrawDocumentAppStatePersistence.appStateOnlyPersistentData(from: fields)
         let newAppStateObject = try JSONSerialization.jsonObject(with: appStateData)
         guard let newAppStateDictionary = newAppStateObject as? [String: Any],
               let contentObject = try JSONSerialization.jsonObject(with: content) as? [String: Any] else {

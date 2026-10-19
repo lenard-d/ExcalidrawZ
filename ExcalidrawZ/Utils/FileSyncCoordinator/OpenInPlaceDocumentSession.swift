@@ -64,10 +64,26 @@ final class OpenInPlaceAccessStore {
     }
 
     @MainActor
-    func save(_ content: Data, to url: URL) async throws -> Bool {
+    func writer(for url: URL) -> ExternalFileSaveCoordinator.Writer? {
+#if os(iOS)
+        guard let session = sessions[url.standardizedFileURL] else { return nil }
+        return { content, target, baseline in
+            guard await session.url.standardizedFileURL == target.standardizedFileURL else {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            try await session.save(content: content, replacing: baseline)
+            return try ExternalFileVersion(content: content, at: target)
+        }
+#else
+        return ExternalFileWriter.write
+#endif
+    }
+
+    @MainActor
+    func save(_ content: Data, to url: URL, replacing baseline: ExternalFileVersion) async throws -> Bool {
 #if os(iOS)
         guard let session = sessions[url.standardizedFileURL] else { return false }
-        try await session.save(content: content)
+        try await session.save(content: content, replacing: baseline)
         return true
 #else
         return false
@@ -87,10 +103,14 @@ final class OpenInPlaceAccessStore {
 
             self.closeTasks[key] = nil
             guard !self.retainedURLs.contains(key),
-                  let session = self.sessions.removeValue(forKey: key) else {
+                  let session = self.sessions[key] else {
                 return
             }
-            await session.close()
+            guard await session.close() else {
+                self.logger.error("External document close failed; retaining session: \(key.lastPathComponent)")
+                return
+            }
+            self.sessions[key] = nil
             self.logger.debug("Closed external document session: \(key.lastPathComponent)")
         }
 #else
@@ -116,12 +136,11 @@ final class OpenInPlaceAccessStore {
 /// `UIDocument` owns the security-scoped URL and acts as its file presenter.
 @MainActor
 final class OpenInPlaceDocumentSession {
-    let url: URL
+    var url: URL { document.fileURL }
 
     private let document: OpenInPlaceDataDocument
 
     private init(url: URL, document: OpenInPlaceDataDocument) {
-        self.url = url
         self.document = document
     }
 
@@ -137,49 +156,77 @@ final class OpenInPlaceDocumentSession {
             throw CocoaError(.fileReadNoPermission, userInfo: [NSURLErrorKey: url])
         }
 
-        return OpenInPlaceDocumentSession(url: url, document: document)
+        let session = OpenInPlaceDocumentSession(url: url, document: document)
+        return session
     }
 
     var content: Data {
         document.content
     }
 
-    func save(content: Data) async throws {
-        document.replaceContent(with: content)
+    func save(content: Data, replacing baseline: ExternalFileVersion) async throws {
+        try Task.checkCancellation()
+        guard !document.documentState.contains(.inConflict) else {
+            throw CocoaError(.fileWriteFileExists)
+        }
+        document.replaceContent(with: content, replacing: baseline)
         let didSave = await withCheckedContinuation { continuation in
             document.save(to: url, for: .forOverwriting) { success in
                 continuation.resume(returning: success)
             }
         }
         guard didSave else {
-            throw CocoaError(.fileWriteUnknown, userInfo: [NSURLErrorKey: url])
+            throw document.lastWriteError ?? CocoaError(.fileWriteUnknown, userInfo: [NSURLErrorKey: url])
         }
+        document.acknowledgeSave()
     }
 
-    func close() async {
-        guard document.documentState.contains(.closed) == false else { return }
-        await withCheckedContinuation { continuation in
-            document.close { _ in
-                continuation.resume()
+    func close() async -> Bool {
+        guard !document.documentState.contains(.closed) else { return true }
+        guard !document.hasUnsavedChanges else { return false }
+        let didClose = await withCheckedContinuation { continuation in
+            document.close { success in
+                continuation.resume(returning: success)
             }
         }
+        return didClose
     }
 }
 
 private final class OpenInPlaceDataDocument: UIDocument {
-    private(set) var content = Data()
+    private let contentLock = NSLock()
+    private var storedContent = Data()
+    private var baseline: ExternalFileVersion?
+    private var writeError: Error?
+    private var pendingContent = false
 
-    func replaceContent(with content: Data) {
-        self.content = content
+    var content: Data { contentLock.withLock { storedContent } }
+    var lastWriteError: Error? { contentLock.withLock { writeError } }
+
+    func replaceContent(with content: Data, replacing baseline: ExternalFileVersion) {
+        contentLock.withLock {
+            storedContent = content
+            pendingContent = true
+            self.baseline = baseline
+            writeError = nil
+        }
         updateChangeCount(.done)
     }
 
-    override func load(fromContents contents: Any, ofType typeName: String?) throws {
+    func acknowledgeSave() {
+        contentLock.withLock { pendingContent = false }
+    }
+
+    override func load(fromContents
+ contents: Any, ofType typeName: String?) throws {
+        guard !contentLock.withLock({ pendingContent }) else {
+            throw CocoaError(.fileWriteFileExists)
+        }
         if let data = contents as? Data {
-            content = data
+            contentLock.withLock { storedContent = data }
         } else if let fileWrapper = contents as? FileWrapper,
                   let data = fileWrapper.regularFileContents {
-            content = data
+            contentLock.withLock { storedContent = data }
         } else {
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -187,6 +234,22 @@ private final class OpenInPlaceDataDocument: UIDocument {
 
     override func contents(forType typeName: String) throws -> Any {
         content
+    }
+
+    override func writeContents(_ contents: Any, to url: URL, for saveOperation: UIDocument.SaveOperation, originalContentsURL: URL?) throws {
+        do {
+            guard let baseline = contentLock.withLock({ baseline }),
+                  let originalContentsURL else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let current = try ExternalFileVersion(content: Data(contentsOf: originalContentsURL), at: originalContentsURL)
+            try baseline.validateReplacement(of: current)
+            // UIDocument owns coordination and safe replacement. Do not nest a coordinator here.
+            try super.writeContents(contents, to: url, for: saveOperation, originalContentsURL: originalContentsURL)
+        } catch {
+            contentLock.withLock { writeError = error }
+            throw error
+        }
     }
 }
 #else

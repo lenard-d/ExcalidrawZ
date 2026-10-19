@@ -66,6 +66,8 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         reset()
     }
 
+    var hasPendingDirtySnapshot: Bool { contentScheduler.hasPendingDirtySnapshot() || appStateSaver.hasPendingSave || programmaticCommitter.hasPendingSave }
+
     func handleStateChangedMetadata(
         _ metadata: ExcalidrawCore.StateChangedMetadata,
         currentFileID: String?,
@@ -91,10 +93,19 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         }
 
         appStateSaver.clear()
-        contentScheduler.recordPendingContentDirtyMetadata(
-            metadata,
-            currentFileID: currentFileID
+        contentScheduler.recordPendingContentDirty(
+            fileID: metadata.currentFileId ?? currentFileID,
+            revision: metadata.revision
         )
+    }
+
+    @MainActor
+    func performOwnedCanvasMutation(
+        in session: CanvasMutationSession,
+        reason: String,
+        operation: @escaping @MainActor () async throws -> Void
+    ) async throws {
+        try await programmaticCommitter.performOwnedMutation(in: session, reason: reason, operation: operation)
     }
 
     @MainActor
@@ -111,7 +122,8 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         expectedFileID: String? = nil,
         validateParentFileID: Bool = true
     ) async {
-        await contentScheduler.waitForCommitToFinish()
+        guard await programmaticCommitter.waitUntilIdle(),
+              await contentScheduler.waitForCommitToFinish() else { return }
         if let flushState = contentScheduler.takeFlushState() {
             await commitDirtySnapshot(
                 reason: reason,
@@ -119,6 +131,11 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 expectedRevision: flushState.expectedRevision,
                 requirePendingDirty: !force,
                 validateParentFileID: validateParentFileID
+            )
+        } else if programmaticCommitter.hasPendingSave {
+            await commitDirtySnapshot(
+                reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
+                requirePendingDirty: false, validateParentFileID: validateParentFileID
             )
         } else if force {
             let didCommitCurrentAppState = await appStateSaver.flushCurrentAppState(reason: reason)
@@ -226,6 +243,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 return
             }
 
+            let mutationRevision = await programmaticCommitter.pendingRevision(fileID: currentFileID ?? "")
             let snapshot = try await core.getCurrentFileSnapshot()
             if let expectedRevision,
                let snapshotRevision = snapshot.revision,
@@ -243,6 +261,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 savingType: savingType,
                 markProgrammaticCommit: false
             )
+            programmaticCommitter.acknowledge(mutationRevision)
             contentScheduler.markCommitted(
                 snapshotRevision: snapshot.revision,
                 fallbackRevision: expectedRevision
@@ -262,7 +281,8 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         capturedContent: Data?,
         forceCurrentAppState: Bool = false
     ) async {
-        await contentScheduler.waitForCommitToFinish()
+        guard await programmaticCommitter.waitUntilIdle(),
+              await contentScheduler.waitForCommitToFinish() else { return }
         if let flushState = contentScheduler.takeFlushState() {
             await commitDirtySnapshotToCapturedTarget(
                 reason: reason,
@@ -270,6 +290,11 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 expectedRevision: flushState.expectedRevision,
                 target: target,
                 capturedContent: capturedContent
+            )
+        } else if programmaticCommitter.hasPendingSave {
+            await commitDirtySnapshotToCapturedTarget(
+                reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
+                target: target, capturedContent: capturedContent
             )
         } else if forceCurrentAppState {
             let didCommitCurrentAppState = await appStateSaver.flushCurrentAppStateToCapturedTarget(
@@ -314,6 +339,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 return
             }
 
+            let mutationRevision = await programmaticCommitter.pendingRevision(fileID: expectedFileID)
             let snapshot = try await core.getCurrentFileSnapshot()
             if let expectedRevision,
                let snapshotRevision = snapshot.revision,
@@ -332,7 +358,16 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
             file.id = expectedFileID
             file.content = capturedContent ?? file.content
             try file.update(data: fileData)
-            await FileState.saveCapturedCanvasUpdate(target, with: file)
+            let capturedFile = file
+            if case .localFile = target.kind {
+                await MainActor.run {
+                    guard core.parent?.file?.id == expectedFileID,
+                          let fileState = core.parent?.fileState else { return }
+                    fileState.applyExternalCanvasSnapshot { core.parent?.file = capturedFile }
+                }
+            }
+            try await FileState.saveCapturedCanvasUpdate(target, with: file)
+            programmaticCommitter.acknowledge(mutationRevision)
             contentScheduler.markCommitted(
                 snapshotRevision: snapshot.revision,
                 fallbackRevision: expectedRevision
@@ -342,6 +377,9 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
             return
         } catch {
             core.logger.error("Failed to commit background dirty canvas snapshot \(reason): \(error)")
+            if case .localFile(let url, _, _) = target.kind {
+                await core.parent?.fileState.reportExternalSaveFailure(error, at: url)
+            }
             core.publishError(error)
         }
     }
