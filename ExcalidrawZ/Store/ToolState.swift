@@ -73,7 +73,7 @@ enum ExcalidrawTool: Int, Hashable, CaseIterable {
             case .hand:
                 self = .hand
             case .lasso:
-                self = .cursor
+                self = .lasso
         }
     }
     
@@ -187,12 +187,7 @@ enum ExcalidrawTool: Int, Hashable, CaseIterable {
     }
 
     var supportsOrderedNumericShortcut: Bool {
-        switch self {
-            case .lasso:
-                false
-            default:
-                true
-        }
+        true
     }
     
     var localization: String {

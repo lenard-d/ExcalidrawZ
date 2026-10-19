@@ -110,6 +110,10 @@ class ExcalidrawWebView: WKWebView {
            char.count == 1,
            let character = char.first {
             if let num = Int(char), num >= 0, num <= 9 {
+                guard event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else {
+                    super.keyDown(with: event)
+                    return
+                }
                 self.toolbarActionHandler(.number(num))
             } else if ExcalidrawTool.allCases.compactMap({ $0.keyEquivalent }).contains(character) {
                 self.toolbarActionHandler(.char(character))
@@ -129,6 +133,33 @@ class ExcalidrawWebView: WKWebView {
 #endif
 
 #if os(iOS)
+    override var keyCommands: [UIKeyCommand]? {
+        let inheritedCommands = super.keyCommands ?? []
+        guard shouldHandleInput, nativeInteractionEnabled else { return inheritedCommands }
+        return inheritedCommands + (0...9).map { number in
+            UIKeyCommand(
+                input: String(number),
+                modifierFlags: [],
+                action: #selector(selectOrderedTool(_:))
+            )
+        }
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(selectOrderedTool(_:)) {
+            return shouldHandleInput && nativeInteractionEnabled
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    @objc private func selectOrderedTool(_ command: UIKeyCommand) {
+        guard shouldHandleInput, nativeInteractionEnabled,
+              command.modifierFlags.isEmpty,
+              let input = command.input, input.count == 1,
+              let number = Int(input), (0...9).contains(number) else { return }
+        toolbarActionHandler(.number(number))
+    }
+
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard nativeInteractionEnabled else { return false }
         return super.point(inside: point, with: event)
