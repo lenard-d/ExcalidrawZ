@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Combine
 import UniformTypeIdentifiers
 
 /// Owns the synchronization boundary between the native `ExcalidrawCanvasView`
@@ -76,6 +77,12 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
     var currentLoadGeneration: UInt64 { lock.withLock { loadState.generation } }
     private weak var core: ExcalidrawCore?
     private let snapshotCoordinator = ExcalidrawDocumentSnapshotCoordinator()
+    private let canvasMutationSessionChangeSubject = PassthroughSubject<Void, Never>()
+    /// Broadcasts admission changes. Observers must recheck their captured session.
+    var canvasMutationSessionChanges: AnyPublisher<Void, Never> {
+        canvasMutationSessionChangeSubject.eraseToAnyPublisher()
+    }
+
     let loadEvents: AsyncStream<LoadEvent>
     private let loadEventContinuation: AsyncStream<LoadEvent>.Continuation
     private var loadState = DocumentLoadStateMachine()
@@ -776,6 +783,7 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
             startedAt: Date()
         )
         lock.unlock()
+        canvasMutationSessionChangeSubject.send()
         loadEventContinuation.yield(.started(fileID: fileID))
         return (request, token)
     }
@@ -802,6 +810,7 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
         let didCommit = loadState.confirm(request)
         lock.unlock()
         if didCommit {
+            canvasMutationSessionChangeSubject.send()
             loadEventContinuation.yield(
                 .finished(fileID: request.fileID, completion: .succeeded)
             )
@@ -818,6 +827,7 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
         let wasCurrent = loadState.fail(request)
         lock.unlock()
         if wasCurrent {
+            canvasMutationSessionChangeSubject.send()
             let completion: LoadCompletion = switch outcome {
                 case .failed:
                     .failed(failure ?? LoadFailure(nil))
@@ -839,6 +849,7 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
         loadState.reset()
         stateChangeSuppressions.removeAll()
         lock.unlock()
+        canvasMutationSessionChangeSubject.send()
         loadEventContinuation.yield(.reset)
     }
 
