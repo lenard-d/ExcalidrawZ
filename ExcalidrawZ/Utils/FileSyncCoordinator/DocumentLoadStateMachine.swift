@@ -38,6 +38,10 @@ struct DocumentLoadStateMachine {
         currentRequest == request
     }
 
+    func isConfirmed(_ request: Request) -> Bool {
+        generation == request.generation && currentRequest == nil && confirmedFileID == request.fileID
+    }
+
     mutating func confirm(_ request: Request) -> Bool {
         guard isCurrent(request) else { return false }
         confirmedFileID = request.fileID

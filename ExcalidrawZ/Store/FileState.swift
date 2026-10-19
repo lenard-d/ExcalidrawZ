@@ -15,6 +15,7 @@ import ChocofordEssentials
 
 final class FileState: ObservableObject {
     let logger = Logger(label: "FileState")
+    let canvasSaveCoordinator = CanvasSaveCoordinator()
 
     private let openInPlaceAccessStore = OpenInPlaceAccessStore()
 
@@ -460,6 +461,7 @@ final class FileState: ObservableObject {
 
     @MainActor
     private func applyActiveFile(_ newValue: ActiveFile?) {
+        canvasSaveCoordinator.invalidate()
         let previousActiveFile = currentActiveFile
         let previousConversationScope = previousActiveFile?.aiConversationFileScope
         let nextConversationScope = newValue?.aiConversationFileScope
@@ -1432,18 +1434,27 @@ final class FileState: ObservableObject {
 
     static func saveCapturedCanvasUpdate(
         _ target: CapturedCanvasSaveTarget,
-        with excalidrawFile: ExcalidrawFile
+        with excalidrawFile: ExcalidrawFile,
+        capture: CanvasSaveCapture? = nil
     ) async throws {
-        try await persistCapturedCanvasUpdate(target, with: excalidrawFile)
+        if let capture {
+            try await capture.performSave {
+                try await persistCapturedCanvasUpdate(target, with: excalidrawFile, capture: capture)
+            }
+        } else {
+            try await persistCapturedCanvasUpdate(target, with: excalidrawFile)
+        }
     }
 
     static func persistCapturedCanvasUpdate(
         _ target: CapturedCanvasSaveTarget,
-        with excalidrawFile: ExcalidrawFile
+        with excalidrawFile: ExcalidrawFile,
+        capture: CanvasSaveCapture? = nil
     ) async throws {
         try await persistCapturedCanvasUpdate(
             target,
             with: excalidrawFile,
+            capture: capture,
             logger: Logger(label: "FileState")
         )
     }
@@ -1451,6 +1462,7 @@ final class FileState: ObservableObject {
     private static func persistCapturedCanvasUpdate(
         _ target: CapturedCanvasSaveTarget,
         with excalidrawFile: ExcalidrawFile,
+        capture: CanvasSaveCapture?,
         logger: Logger
     ) async throws {
         switch target.kind {
@@ -1479,6 +1491,7 @@ final class FileState: ObservableObject {
                     with: excalidrawFile,
                     writer: externalFileWriter(for: target),
                     session: target.saveSessionID,
+                    capture: capture,
                     newCheckpoint: newCheckpoint,
                     suppressCheckpoint: suppressCheckpoint,
                     logger: logger
@@ -1568,13 +1581,14 @@ final class FileState: ObservableObject {
 
     static func saveCapturedAppStateOnlyUpdate(
         _ target: CapturedCanvasSaveTarget,
-        content: Data
+        content: Data,
+        capture: CanvasSaveCapture? = nil
     ) async throws {
         let logger = Logger(label: "FileState")
         do {
             switch target.kind {
                 case .libraryFile(let objectURI, let fileName, _, _):
-                    guard let fileObjectID = managedObjectID(for: objectURI) else { return }
+                    guard let fileObjectID = managedObjectID(for: objectURI) else { throw AppError.fileError(.notFound) }
                     try await PersistenceController.shared.fileRepository.updateElements(
                         fileObjectID: fileObjectID,
                         fileData: content,
@@ -1585,7 +1599,7 @@ final class FileState: ObservableObject {
 
                 case .localFile(let url, _, _):
                     try await ExternalFileSaveCoordinator.shared.saveAppState(
-                        from: content, to: url, session: target.saveSessionID, writer: externalFileWriter(for: target)
+                        from: content, to: url, session: target.saveSessionID, capture: capture, writer: externalFileWriter(for: target)
                     )
                     logger.debug("Background appState-only local file update saved: \(url.lastPathComponent)")
 
@@ -1609,6 +1623,7 @@ final class FileState: ObservableObject {
         with file: ExcalidrawFile,
         writer: @escaping ExternalFileSaveCoordinator.Writer,
         session: UUID?,
+        capture: CanvasSaveCapture? = nil,
         newCheckpoint: Bool,
         suppressCheckpoint: Bool,
         logger: Logger
@@ -1617,7 +1632,7 @@ final class FileState: ObservableObject {
         try file.updateContentFilesFromFiles()
         guard let data = file.content else { throw CocoaError(.fileWriteUnknown) }
         try await ExternalFileSaveCoordinator.shared.save(
-            data, to: url, session: session, writer: writer
+            data, to: url, session: session, capture: capture, writer: writer
         )
 
         guard !suppressCheckpoint else {
@@ -1643,16 +1658,18 @@ final class FileState: ObservableObject {
     @MainActor
     func updateAppStateOnlyForCurrentFile(
         expectedFileID: String?,
-        content: Data
+        content: Data,
+        capture: CanvasSaveCapture? = nil
     ) async throws {
         guard let activeFile = currentActiveFile,
               expectedFileID == nil || activeFile.id == expectedFileID else {
-            return
+            throw CancellationError()
         }
+        try capture?.withAdmission {}
 
         switch activeFile {
             case .file(let file):
-                guard !file.inTrash else { return }
+                guard !file.inTrash else { throw CancellationError() }
                 try await PersistenceController.shared.fileRepository.updateElements(
                     fileObjectID: file.objectID,
                     fileData: content,
@@ -1664,7 +1681,7 @@ final class FileState: ObservableObject {
                 let isOpenInPlace: Bool
                 if case .temporaryFile = activeFile { isOpenInPlace = true } else { isOpenInPlace = false }
                 try await ExternalFileSaveCoordinator.shared.saveAppState(
-                    from: content, to: url, session: externalSaveSessionID, writer: isOpenInPlace ? (openInPlaceAccessStore.writer(for: url) ?? Self.externalFileWriter(isOpenInPlace: true)) : Self.externalFileWriter(isOpenInPlace: false)
+                    from: content, to: url, session: externalSaveSessionID, capture: capture, writer: isOpenInPlace ? (openInPlaceAccessStore.writer(for: url) ?? Self.externalFileWriter(isOpenInPlace: true)) : Self.externalFileWriter(isOpenInPlace: false)
                 )
 
             case .collaborationFile:

@@ -2,6 +2,13 @@ import Foundation
 
 extension FileState {
     @MainActor
+    func captureCanvasSave(expectedFileID: String? = nil) -> CanvasSaveCapture? {
+        guard let session = excalidrawWebCoordinator?.documentSyncController.captureCanvasMutationSession(),
+              expectedFileID == nil || session.fileID == expectedFileID else { return nil }
+        return canvasSaveCoordinator.capture(owner: session)
+    }
+
+    @MainActor
     func applyExternalCanvasSnapshot(_ apply: () -> Void) {
         isApplyingExternalCanvasSnapshot = true
         defer { isApplyingExternalCanvasSnapshot = false }
@@ -84,6 +91,7 @@ extension FileState {
     @MainActor
     func installExternalSaveSession(_ session: UUID) {
         let previousSession = externalSaveSessionID
+        canvasSaveCoordinator.invalidate()
         externalSaveSessionID = session
         Task { await ExternalFileSaveCoordinator.shared.releaseSession(previousSession) }
     }
@@ -146,7 +154,7 @@ extension FileState {
     }
 
     @MainActor
-    func persistExternalCanvasUpdate(_ file: ExcalidrawFile, to url: URL) async throws {
+    func persistExternalCanvasUpdate(_ file: ExcalidrawFile, to url: URL, capture: CanvasSaveCapture? = nil) async throws {
         guard shouldAcceptCanvasUpdate(fileID: url.absoluteString, label: url.lastPathComponent),
               let activeFile = currentActiveFile,
               let target = capturedCanvasSaveTarget(for: activeFile),
@@ -154,9 +162,10 @@ extension FileState {
               capturedURL.standardizedFileURL == url.standardizedFileURL else {
             throw CancellationError()
         }
+        guard let capture = capture ?? captureCanvasSave(expectedFileID: file.id) else { throw CancellationError() }
         do {
             try await Self.saveCapturedLocalCanvasUpdate(
-                to: url, with: file, writer: Self.externalFileWriter(for: target), session: target.saveSessionID,
+                to: url, with: file, writer: Self.externalFileWriter(for: target), session: target.saveSessionID, capture: capture,
                 newCheckpoint: newCheckpoint, suppressCheckpoint: suppressCheckpoint, logger: logger
             )
             reportedExternalSaveFailures.remove(url.standardizedFileURL)

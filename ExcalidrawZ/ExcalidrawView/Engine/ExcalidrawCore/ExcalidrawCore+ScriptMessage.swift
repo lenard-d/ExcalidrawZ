@@ -304,8 +304,10 @@ extension ExcalidrawCore: WKScriptMessageHandler {
 extension ExcalidrawCore {
     func onStateChanged(_ data: StateChangedMessageData) {
         let documentSyncController = documentSyncController
-        Task {
-            await documentSyncController.save(data)
+        // WKScriptMessageHandler delivers this callback on the main thread.
+        MainActor.assumeIsolated {
+            guard let admission = documentSyncController.admitStateChanged(data) else { return }
+            Task { await documentSyncController.save(data, admission: admission) }
         }
     }
     

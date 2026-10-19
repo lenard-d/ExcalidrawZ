@@ -62,6 +62,7 @@ final class ExcalidrawDocumentProgrammaticSnapshotCommitter: @unchecked Sendable
         }
 
         core.parent?.fileState.noteProgrammaticCanvasMutation(fileID: fileID)
+        _ = core.parent?.fileState.captureCanvasSave(expectedFileID: fileID)
         if let session = core.documentSyncController.captureCanvasMutationSession() {
             mutations.recordMutation(in: session)
         }
@@ -112,6 +113,8 @@ final class ExcalidrawDocumentProgrammaticSnapshotCommitter: @unchecked Sendable
                 return
             }
 
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID) }
+            guard let capture else { throw CancellationError() }
             let snapshot = try await core.getCurrentFileSnapshot()
             let fileData = try delegate.snapshotCoordinatorMakeFileData(from: snapshot)
             try await delegate.snapshotCoordinatorApplyCanvasFileData(
@@ -119,9 +122,10 @@ final class ExcalidrawDocumentProgrammaticSnapshotCommitter: @unchecked Sendable
                 currentFileID: currentFileID,
                 type: type,
                 savingType: savingType,
-                markProgrammaticCommit: true
+                markProgrammaticCommit: true,
+                capture: capture
             )
-            acknowledge(pendingRevision)
+            capture.acknowledgeDurable { acknowledge(pendingRevision) }
             core.logger.debug("Committed programmatic canvas mutation: \(reason)")
         } catch is CancellationError {
             return

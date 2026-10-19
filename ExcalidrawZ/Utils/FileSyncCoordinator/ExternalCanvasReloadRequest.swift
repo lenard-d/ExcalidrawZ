@@ -58,10 +58,10 @@ final class ExternalCanvasReloadRequest {
         return true
     }
 
-    func finish(didLoad: Bool) {
+    func finish(didLoad: Bool, isCurrentLoad: Bool = true) {
         guard started, !finished else { return }
         finished = true
-        guard didLoad, !Task.isCancelled, isCurrent() else {
+        guard didLoad, isCurrentLoad, !Task.isCancelled, isCurrent() else {
             onReject()
             return
         }

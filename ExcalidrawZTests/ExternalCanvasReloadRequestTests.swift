@@ -74,7 +74,43 @@ final class ExternalCanvasReloadRequestTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedLoadKeepsOriginalNativeSceneAndSession() {
+    func testFinishedOlderLoadCannotInstallSessionAfterNewerSameFileLoad() throws {
+        for confirmNewer in [false, true] {
+            var loads = DocumentLoadStateMachine()
+            let prepared = try XCTUnwrap(loads.begin(fileID: "drawing", force: true))
+            var installed = false
+            var rejected = false
+            let request = ExternalCanvasReloadRequest(
+                fileID: "drawing", editRevision: 0, isCurrent: { true },
+                onAccept: { installed = true }, onReject: { rejected = true }
+            )
+            XCTAssertTrue(request.start(fileID: "drawing") { true })
+            XCTAssertTrue(loads.confirm(prepared))
+            let newer = try XCTUnwrap(loads.begin(fileID: "drawing", force: true))
+            if confirmNewer { XCTAssertTrue(loads.confirm(newer)) }
+            request.finish(didLoad: true, isCurrentLoad: loads.isConfirmed(prepared))
+            XCTAssertFalse(installed)
+            XCTAssertTrue(rejected)
+        }
+    }
+
+    @MainActor
+    func testCurrentSuccessfulLoadInstallsPreparedSession() throws {
+        var loads = DocumentLoadStateMachine()
+        let prepared = try XCTUnwrap(loads.begin(fileID: "drawing", force: true))
+        var installed = false
+        let request = ExternalCanvasReloadRequest(
+            fileID: "drawing", editRevision: 0, isCurrent: { true },
+            onAccept: { installed = true }, onReject: { XCTFail("The current completed load must install") }
+        )
+        XCTAssertTrue(request.start(fileID: "drawing") { true })
+        XCTAssertTrue(loads.confirm(prepared))
+        request.finish(didLoad: true, isCurrentLoad: loads.isConfirmed(prepared))
+        XCTAssertTrue(installed)
+    }
+
+    @MainActor
+    func testFailedLoadRejectsNativeInstallationCallback() {
         var accepted = false
         var rejected = false
         let request = ExternalCanvasReloadRequest(

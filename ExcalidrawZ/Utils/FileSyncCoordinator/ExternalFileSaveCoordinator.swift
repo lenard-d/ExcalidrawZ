@@ -53,6 +53,7 @@ actor ExternalFileSaveCoordinator {
     private struct Pending {
         let generation: UInt64
         let content: Data
+        let capture: CanvasSaveCapture?
     }
 
     private var generation: UInt64 = 0
@@ -97,11 +98,16 @@ actor ExternalFileSaveCoordinator {
         baselines[Target(url: key.url, session: session)] = baseline
     }
 
-    func save(_ content: Data, to url: URL, session: UUID? = nil, writer: @escaping Writer) async throws {
+    func save(_ content: Data, to url: URL, session: UUID? = nil, capture: CanvasSaveCapture? = nil, writer: @escaping Writer) async throws {
         let key = Target(url: url.standardizedFileURL, session: session)
         generation &+= 1
-        let request = Pending(generation: generation, content: content)
-        pending[key] = request
+        let request = Pending(generation: generation, content: content, capture: capture)
+        if let capture {
+            guard capture.owner.saveSession == session else { throw CancellationError() }
+            try capture.withAdmission { pending[key] = request }
+        } else {
+            pending[key] = request
+        }
         let previousWrite = writes[key.url]
         let operation = Task {
             await previousWrite?.value
@@ -131,12 +137,13 @@ actor ExternalFileSaveCoordinator {
     }
 
     func retry(at url: URL, session: UUID? = nil, writer: @escaping Writer) async throws {
-        guard let content = pendingContent(at: url, session: session) else { return }
-        try await save(content, to: url, session: session, writer: writer)
+        let key = Target(url: url.standardizedFileURL, session: session)
+        guard let request = pending[key] else { return }
+        try await save(request.content, to: url, session: session, capture: request.capture, writer: writer)
     }
 
     /// Metadata saves merge into the latest queued drawing, or the confirmed drawing.
-    func saveAppState(from content: Data, to url: URL, session: UUID? = nil, writer: @escaping Writer) async throws {
+    func saveAppState(from content: Data, to url: URL, session: UUID? = nil, capture: CanvasSaveCapture? = nil, writer: @escaping Writer) async throws {
         let key = Target(url: url.standardizedFileURL, session: session)
         guard let source = pending[key]?.content ?? baselines[key]?.content,
               var document = try JSONSerialization.jsonObject(with: source) as? [String: Any],
@@ -147,7 +154,7 @@ actor ExternalFileSaveCoordinator {
         document["appState"] = ExcalidrawDocumentAppStatePersistence.appStateObjectByMergingAppStateOnlyPersistentFields(
             from: appState, into: document["appState"] ?? [:], nativeFileName: nil
         )
-        try await save(JSONSerialization.data(withJSONObject: document), to: key.url, session: session, writer: writer)
+        try await save(JSONSerialization.data(withJSONObject: document), to: key.url, session: session, capture: capture, writer: writer)
     }
 
     private func write(_ request: Pending, to key: Target, writer: Writer) async throws {
@@ -164,7 +171,18 @@ actor ExternalFileSaveCoordinator {
                 releaseSession(session)
             }
         }
-        let saved = try await writer(request.content, key.url, baseline)
+        let saved: ExternalFileVersion
+        if let capture = request.capture {
+            try capture.withAdmission {}
+            var receipt: ExternalFileVersion?
+            try await capture.performSave {
+                receipt = try await writer(request.content, key.url, baseline)
+            }
+            guard let receipt else { throw CocoaError(.fileWriteUnknown) }
+            saved = receipt
+        } else {
+            saved = try await writer(request.content, key.url, baseline)
+        }
         baselines[key] = saved
         if pending[key]?.generation == request.generation {
             pending[key] = nil
