@@ -11,6 +11,7 @@ import Logging
 
 class PersistenceController {
     static let shared = {
+        ICloudContainerConfiguration.current.registerCloudSyncDefaults(in: .standard)
         let cloudKitEnabled = !UserDefaults.standard.bool(forKey: "DisableCloudSync")
         let stack = PersistenceController(cloudKitEnabled: cloudKitEnabled)
         stack.prepare()
