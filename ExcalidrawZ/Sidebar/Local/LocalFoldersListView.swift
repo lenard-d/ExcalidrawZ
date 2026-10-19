@@ -78,10 +78,13 @@ struct LocalFoldersListContent: View {
             }
         }
         .animation(.smooth, value: showLocalFolderEmptyPlaceholder)
-        .onAppear {
-            for folder in folders {
+        .task {
+            let folderIDs = folders.map(\.objectID)
+            for folderID in folderIDs {
                 do {
-                    try folder.refreshChildren(context: viewContext)
+                    try await LocalFolder.refreshChildrenOffMain(folderID: folderID, context: viewContext)
+                } catch is CancellationError {
+                    return
                 } catch {
                     alertToast(error)
                 }
