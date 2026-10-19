@@ -45,6 +45,9 @@ private struct PageModeSheetHost: View {
             }
         }
         .onChange(of: fileState.currentActiveFile?.id) { _ in controller?.invalidate() }
+        .onReceive(toolState.$excalidrawWebCoordinator) { incoming in
+            if incoming !== core { controller?.invalidate() }
+        }
         .onReceive(lockedContentState.$activeFileLockState) { state in
             if state == .locked { controller?.invalidate() }
         }
