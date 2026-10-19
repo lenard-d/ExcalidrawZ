@@ -257,7 +257,14 @@ extension LocalFolder {
                     activeRefreshes.removeValue(forKey: rootID)
                 }
             }
-            let plan = try await LinkedFolderRefresh.shared.read(snapshot.request, provider: provider ?? refreshProvider)
+            let plan: LinkedFolderRefresh.Plan
+            do {
+                plan = try await LinkedFolderRefresh.shared.read(snapshot.request, provider: provider ?? refreshProvider)
+            } catch {
+                // A cancelled provider call can return its own error before checking cancellation.
+                try Task.checkCancellation()
+                throw error
+            }
             try Task.checkCancellation()
 
             let change = try context.performAndWait { () throws -> ResolvedLocationChange? in
