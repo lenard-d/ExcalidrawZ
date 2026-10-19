@@ -119,7 +119,9 @@ struct PageModeSheet: View {
             if case .failure(let error) = result { controller.errorMessage = error.localizedDescription }
             controller.exportData = nil
         }
-        .onDisappear { controller.invalidate() }
+        .onDisappear {
+            if !isExportPresented { controller.invalidate() }
+        }
     }
 
     private func pageRow(_ page: PageModePage, index: Int) -> some View {

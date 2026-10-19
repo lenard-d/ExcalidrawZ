@@ -88,7 +88,10 @@ final class PageModeController: ObservableObject {
     }
 
     private func report(_ error: Error) {
-        guard isValid else { return }
+        guard isValid, isCurrent() else {
+            invalidate()
+            return
+        }
         errorMessage = error.localizedDescription
     }
 }
