@@ -177,6 +177,77 @@ final class ExternalFolderDirectoryScannerTests: XCTestCase {
         await assertCancelled(task)
     }
 
+    func testRefreshPlansOnlyVisibleDirectoriesUsingProductionScanner() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let visible = root.appendingPathComponent("Notes", isDirectory: true)
+        let nested = visible.appendingPathComponent("Exercises", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".hidden/Private"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: visible.appendingPathComponent("Cycle"),
+            withDestinationURL: root
+        )
+        let scanner = ExternalFolderDirectoryScanner(contents: { try Self.readDirectory(at: $0) })
+        let provider = Self.refreshProvider(root: root, scanner: scanner)
+
+        let plan = try await LinkedFolderRefresh().read(Self.refreshRequest(root: root), provider: provider)
+
+        XCTAssertEqual(
+            Set(plan.directories.map { $0.url.standardizedFileURL.path }),
+            Set([root, visible, nested].map { $0.standardizedFileURL.path })
+        )
+        XCTAssertEqual(Set(plan.newFolderBookmarks.keys.map(\.lastPathComponent)), ["Notes", "Exercises"])
+    }
+
+    func testRefreshFailsWhenScannerCannotClassifyRetainedChild() async {
+        let root = URL(fileURLWithPath: "/unused")
+        let child = root.appendingPathComponent("Retained")
+        let scanner = ExternalFolderDirectoryScanner(
+            contents: { _ in [child] },
+            metadata: { _ in throw ReadFailure.unavailable }
+        )
+        let request = LinkedFolderRefresh.Request(
+            bookmarkData: Data(), rootURL: root, folderURL: root,
+            isRoot: true, recursively: true,
+            revision: [
+                .init(identifier: root, parentIdentifier: nil, url: root, filePath: root.path, bookmarkData: Data()),
+                .init(identifier: child, parentIdentifier: root, url: child, filePath: child.path, bookmarkData: Data()),
+            ]
+        )
+
+        do {
+            _ = try await LinkedFolderRefresh().read(request, provider: Self.refreshProvider(root: root, scanner: scanner))
+            XCTFail("Metadata failure for a retained child must not produce a refresh plan")
+        } catch {
+            XCTAssertTrue(error is ReadFailure)
+        }
+    }
+
+    private static func refreshRequest(root: URL) -> LinkedFolderRefresh.Request {
+        .init(
+            bookmarkData: Data(), rootURL: root, folderURL: root,
+            isRoot: true, recursively: true,
+            revision: [.init(identifier: root, parentIdentifier: nil, url: root, filePath: root.path, bookmarkData: Data())]
+        )
+    }
+
+    private static func refreshProvider(
+        root: URL,
+        scanner: ExternalFolderDirectoryScanner
+    ) -> LinkedFolderRefresh.Provider {
+        .init(
+            resolve: { _ in .init(url: root, isStale: false) },
+            startAccess: { _ in },
+            stopAccess: { _ in },
+            bookmark: { _ in Data() },
+            directoryContents: { try scanner.visibleSubdirectories(at: $0) }
+        )
+    }
+
     private func assertCancelled(_ task: Task<[URL], Error>) async {
         switch await task.result {
         case .success:
