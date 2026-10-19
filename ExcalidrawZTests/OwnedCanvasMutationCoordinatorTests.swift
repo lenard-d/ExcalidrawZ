@@ -11,7 +11,7 @@ final class OwnedCanvasMutationCoordinatorTests: XCTestCase {
     func testFlushWaitsForRegisteredOperationBeforeCapturingScene() async throws {
         let coordinator = OwnedCanvasMutationCoordinator()
         let owner = session()
-        let gate = MutationGate()
+        let gate = SaveTestGate()
         var scene = "before"
         let operation = Task { @MainActor in
             try await coordinator.perform(in: owner) {
@@ -19,7 +19,11 @@ final class OwnedCanvasMutationCoordinatorTests: XCTestCase {
                 scene = "after"
             }
         }
-        await gate.waitUntilPaused()
+        addTeardownBlock {
+            operation.cancel()
+            await gate.release()
+        }
+        try await gate.waitUntilPaused()
         XCTAssertTrue(coordinator.hasPendingSave)
         var capturedScene: String?
         let flushStarted = XCTestExpectation(description: "Flush started")
@@ -27,12 +31,13 @@ final class OwnedCanvasMutationCoordinatorTests: XCTestCase {
             flushStarted.fulfill()
             if await coordinator.waitUntilIdle() { capturedScene = scene }
         }
+        defer { flush.cancel() }
         let started = await XCTWaiter.fulfillment(of: [flushStarted], timeout: 2)
         XCTAssertEqual(started, .completed)
         XCTAssertNil(capturedScene)
         await gate.release()
-        try await operation.value
-        await flush.value
+        try await boundedSaveTestValue(operation)
+        try await boundedSaveTestValue(flush)
         XCTAssertEqual(capturedScene, "after")
         XCTAssertTrue(coordinator.hasPendingSave)
         let revision = try XCTUnwrap(coordinator.pendingRevision(for: owner))
@@ -49,7 +54,9 @@ final class OwnedCanvasMutationCoordinatorTests: XCTestCase {
             XCTFail("The bridge failure must reach its caller")
         } catch is CocoaError { }
         XCTAssertTrue(coordinator.hasPendingSave)
-        let idle = await coordinator.waitUntilIdle()
+        let idleWait = Task { await coordinator.waitUntilIdle() }
+        defer { idleWait.cancel() }
+        let idle = try await boundedSaveTestValue(idleWait)
         XCTAssertTrue(idle)
         let revision = try XCTUnwrap(coordinator.pendingRevision(for: owner))
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -74,20 +81,25 @@ final class OwnedCanvasMutationCoordinatorTests: XCTestCase {
     func testCancelledFlushDoesNotCancelOrAcknowledgeOperation() async throws {
         let coordinator = OwnedCanvasMutationCoordinator()
         let owner = session()
-        let gate = MutationGate()
+        let gate = SaveTestGate()
         var completed = false
         let operation = Task { @MainActor in
             try await coordinator.perform(in: owner) { try await gate.pause(); completed = true }
         }
-        await gate.waitUntilPaused()
+        addTeardownBlock {
+            operation.cancel()
+            await gate.release()
+        }
+        try await gate.waitUntilPaused()
         let flush = Task { await coordinator.waitUntilIdle() }
+        defer { flush.cancel() }
         flush.cancel()
-        let canLeave = await flush.value
+        let canLeave = try await boundedSaveTestValue(flush)
         XCTAssertFalse(canLeave)
         XCTAssertFalse(completed)
         XCTAssertTrue(coordinator.hasPendingSave)
         await gate.release()
-        try await operation.value
+        try await boundedSaveTestValue(operation)
         XCTAssertTrue(completed)
         XCTAssertTrue(coordinator.hasPendingSave)
     }
@@ -122,25 +134,4 @@ final class OwnedCanvasMutationCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.pendingRevision(for: second))
         XCTAssertTrue(coordinator.hasPendingSave)
     }
-}
-
-private actor MutationGate {
-    private nonisolated let started = XCTestExpectation(description: "Mutation entered")
-    private var released = false
-
-    func pause() async throws {
-        started.fulfill()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !released {
-            guard ContinuousClock.now < deadline else { throw CocoaError(.userCancelled) }
-            try await Task.sleep(for: .milliseconds(1))
-        }
-    }
-
-    nonisolated func waitUntilPaused() async {
-        let result = await XCTWaiter.fulfillment(of: [started], timeout: 2)
-        XCTAssertEqual(result, .completed)
-    }
-
-    func release() { released = true }
 }
