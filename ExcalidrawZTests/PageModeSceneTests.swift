@@ -17,8 +17,13 @@ final class PageModeSceneTests: XCTestCase {
                 getSceneElementsIncludingDeleted: () => elements,
                 getAppState: () => appState,
                 getFiles: () => files,
+                mutateElement: (element, updates) => Object.assign(element, updates),
+                updateScene: scene => { writes.push({ before: JSON.stringify(elements), options: scene }); elements = scene.elements; },
             },
-            createElements: skeletons => skeletons.map(value => ({ ...value, id: "new" + nextID++, isDeleted: false })),
+            createElements: skeletons => skeletons.map(value => {
+                if (value.type === "frame" && !Array.isArray(value.children)) throw new Error("Frame skeleton requires children");
+                return { ...value, id: "new" + nextID++, isDeleted: false };
+            }),
             addElements: (added, options) => { writes.push({ before: JSON.stringify(elements), options }); elements.push(...added); },
             updateElements: (patches, options) => {
                 writes.push({ before: JSON.stringify(elements), options });
