@@ -99,7 +99,7 @@ struct PageModeSheet: View {
                 renamedPage = nil
                 Task { await controller.perform(.init(action: .rename, pageID: page.id, title: title)) }
             }
-            .disabled(pageTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pageTitle.count > 120)
+            .disabled(pageTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pageTitle.utf16.count > 120)
         }
         .confirmationDialog(String(localized: "Remove page boundary?"), isPresented: $isRemovePresented, titleVisibility: .visible) {
             Button(String(localized: "Remove page"), role: .destructive) {
