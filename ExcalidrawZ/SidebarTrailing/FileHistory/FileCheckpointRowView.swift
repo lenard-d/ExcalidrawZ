@@ -16,19 +16,23 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
     @ObservedObject var checkpoint: Checkpoint
     var presentsDetail = true
     
-    @State private var file: ExcalidrawFile?
-    @State private var fileSize: Int = 0
+    @State private var metadata: FileCheckpointMetadata?
     
     var body: some View {
         content()
             .task(id: checkpointMetadataLoadID, priority: .background) {
+                let loadID = checkpointMetadataLoadID
+                metadata = nil
                 do {
                     let content = try await loadContent(for: checkpoint)
-                    let file = try? JSONDecoder().decode(ExcalidrawFile.self, from: content)
+                    let metadata = try await FileCheckpointMetadataReader.shared.read(content)
+                    try Task.checkCancellation()
                     await MainActor.run {
-                        self.fileSize = content.count
-                        self.file = file
+                        guard !Task.isCancelled, loadID == checkpointMetadataLoadID else { return }
+                        self.metadata = metadata
                     }
+                } catch is CancellationError {
+                    return
                 } catch {
                     fileCheckpointRowLogger.warning("Failed to load checkpoint metadata: \(error)")
                 }
@@ -82,8 +86,7 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 0) {
-                        if let file {
-                            let elementCount = file.elements.filter { !$0.isDeleted }.count
+                        if let elementCount = metadata?.elementCount {
                             if #available(macOS 13.0, iOS 16.0, *) {
                                 Text(.localizable(.checkpointsElementsDescription(elementCount)))
                             } else {
@@ -92,7 +95,7 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
                             Text(" · ")
                         }
 
-                        Text("\(fileSize.formatted(.byteCount(style: .file)))")
+                        Text("\((metadata?.byteCount ?? 0).formatted(.byteCount(style: .file)))")
                     }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
