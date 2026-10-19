@@ -19,6 +19,11 @@ extension ExcalidrawCore {
         let theme: String?
     }
 
+    struct CancelNativeEyeDropperRequest: Codable, Sendable {
+        let requestId: String
+        let reason: String?
+    }
+
     struct NativeEyeDropperCompletion: Encodable, Sendable {
         let requestId: String
         var color: String?
@@ -56,9 +61,10 @@ extension ExcalidrawCore {
 final class ExcalidrawNativeEyeDropperCoordinator: NSObject {
     private weak var core: ExcalidrawCore?
     private var activeRequest: ExcalidrawCore.NativeEyeDropperRequest?
+    private let onComplete: @MainActor (ExcalidrawCore.NativeEyeDropperCompletion) async throws -> Void
 
 #if os(macOS)
-    private var colorSampler: NSColorSampler?
+    private let sampleColor: @MainActor () async -> NSColor?
 #elseif os(iOS)
     private var colorPicker: UIColorPickerViewController?
     private var didSelectColor = false
@@ -66,8 +72,27 @@ final class ExcalidrawNativeEyeDropperCoordinator: NSObject {
 
     init(core: ExcalidrawCore) {
         self.core = core
+        self.onComplete = { [weak core] completion in
+            try await core?.completeNativeEyeDropper(completion)
+        }
+#if os(macOS)
+        self.sampleColor = {
+            await NSColorSampler().sample()
+        }
+#endif
         super.init()
     }
+
+#if os(macOS)
+    init(
+        sampleColor: @escaping @MainActor () async -> NSColor?,
+        onComplete: @escaping @MainActor (ExcalidrawCore.NativeEyeDropperCompletion) async throws -> Void
+    ) {
+        self.sampleColor = sampleColor
+        self.onComplete = onComplete
+        super.init()
+    }
+#endif
 
     @MainActor
     func request(_ request: ExcalidrawCore.NativeEyeDropperRequest) async {
@@ -78,19 +103,18 @@ final class ExcalidrawNativeEyeDropperCoordinator: NSObject {
             self.colorPicker = nil
         }
 #endif
-        if let activeRequest {
-            await complete(.cancelled(requestId: activeRequest.requestId))
-        }
+        let previousRequest = activeRequest
         activeRequest = request
+        if let previousRequest {
+            await send(.cancelled(requestId: previousRequest.requestId))
+        }
+        guard activeRequest?.requestId == request.requestId else { return }
 
 #if os(macOS)
-        let sampler = NSColorSampler()
-        colorSampler = sampler
-        let color = await sampler.sample()
+        let color = await sampleColor()
         guard activeRequest?.requestId == request.requestId else {
             return
         }
-        colorSampler = nil
         guard let color,
               let hex = Self.sRGBHex(color) else {
             await complete(.cancelled(requestId: request.requestId))
@@ -122,10 +146,18 @@ final class ExcalidrawNativeEyeDropperCoordinator: NSObject {
     }
 
     @MainActor
+    func cancel(requestId: String) {
+        guard activeRequest?.requestId == requestId else { return }
+        // The web request is already settled. Do not echo a completion back to it.
+        invalidate()
+    }
+
+    @MainActor
     func invalidate() {
         activeRequest = nil
 #if os(macOS)
-        colorSampler = nil
+        // AppKit retains the sampler until it ends and offers no cancel method.
+        // Its eventual result is ignored after the request is cleared.
 #elseif os(iOS)
         colorPicker?.delegate = nil
         colorPicker?.dismiss(animated: false)
@@ -138,8 +170,13 @@ final class ExcalidrawNativeEyeDropperCoordinator: NSObject {
     private func complete(_ completion: ExcalidrawCore.NativeEyeDropperCompletion) async {
         guard activeRequest?.requestId == completion.requestId else { return }
         activeRequest = nil
+        await send(completion)
+    }
+
+    @MainActor
+    private func send(_ completion: ExcalidrawCore.NativeEyeDropperCompletion) async {
         do {
-            try await core?.completeNativeEyeDropper(completion)
+            try await onComplete(completion)
         } catch {
             core?.logger.warning("Failed to complete native eye dropper request \(completion.requestId): \(error)")
         }
