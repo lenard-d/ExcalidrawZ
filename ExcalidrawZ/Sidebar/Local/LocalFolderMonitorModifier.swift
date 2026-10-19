@@ -33,6 +33,7 @@ struct LocalFolderMonitorModifier: ViewModifier {
     var folders: FetchedResults<LocalFolder>
 
     @State private var eventStreamTask: Task<Void, Never>?
+    @State private var parentRefreshTasks: [NSManagedObjectID: Task<Void, Never>] = [:]
     @State private var registeredFolders: Set<NSManagedObjectID> = []
     @State private var registeringFolders: Set<NSManagedObjectID> = []
     @State private var folderURLs: [NSManagedObjectID: URL] = [:]
@@ -58,6 +59,8 @@ struct LocalFolderMonitorModifier: ViewModifier {
             .onDisappear {
                 eventStreamTask?.cancel()
                 eventStreamTask = nil
+                parentRefreshTasks.values.forEach { $0.cancel() }
+                parentRefreshTasks.removeAll()
             }
     }
 
@@ -251,11 +254,17 @@ struct LocalFolderMonitorModifier: ViewModifier {
             guard let folderURL = folder.url else { continue }
             
             if parentURL.filePath.hasPrefix(folderURL.filePath) {
-                do {
-                    try folder.refreshChildren(context: viewContext)
-                } catch {
-                    logger.error("Failed to refresh folder children: \(error)")
-                    alertToast(error)
+                let folderID = folder.objectID
+                parentRefreshTasks[folderID]?.cancel()
+                parentRefreshTasks[folderID] = Task { @MainActor in
+                    do {
+                        try await LocalFolder.refreshChildrenOffMain(folderID: folderID, context: viewContext)
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        logger.error("Failed to refresh folder children: \(error)")
+                        alertToast(error)
+                    }
                 }
                 break
             }

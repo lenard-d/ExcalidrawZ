@@ -121,6 +121,7 @@ extension LocalFolder {
         if let change {
             let folderID = objectID
             DispatchQueue.main.async {
+                Self.rebaseLocalFileIDs(from: change.oldURL, to: change.newURL)
                 NotificationCenter.default.post(
                     name: .localFolderResolvedLocationDidChange,
                     object: folderID,
@@ -139,17 +140,17 @@ extension LocalFolder {
         to newRootURL: URL,
         context: NSManagedObjectContext
     ) throws {
-        func updateFolder(_ folder: LocalFolder) {
+        var pending = [self]
+        var visited: Set<NSManagedObjectID> = []
+        while let folder = pending.popLast() {
+            guard visited.insert(folder.objectID).inserted else { continue }
             if let sourceURL = folder.url ?? folder.filePath.map({ URL(fileURLWithPath: $0) }),
                let destinationURL = sourceURL.rebased(from: oldRootURL, to: newRootURL) {
                 folder.url = destinationURL
                 folder.filePath = destinationURL.filePath
             }
-            for case let child as LocalFolder in folder.children?.allObjects ?? [] {
-                updateFolder(child)
-            }
+            pending.append(contentsOf: folder.children?.allObjects.compactMap { $0 as? LocalFolder } ?? [])
         }
-        updateFolder(self)
 
         let checkpointRequest = NSFetchRequest<LocalFileCheckpoint>(entityName: "LocalFileCheckpoint")
         for checkpoint in try context.fetch(checkpointRequest) {
@@ -159,12 +160,225 @@ extension LocalFolder {
             }
         }
 
+    }
+
+    private static func rebaseLocalFileIDs(from oldRootURL: URL, to newRootURL: URL) {
         let existingMappings = ExcalidrawFile.localFileURLIDMapping
         for (sourceURL, fileID) in existingMappings {
             guard let destinationURL = sourceURL.rebased(from: oldRootURL, to: newRootURL) else { continue }
             ExcalidrawFile.localFileURLIDMapping[sourceURL] = nil
             ExcalidrawFile.localFileURLIDMapping[destinationURL] = fileID
         }
+    }
+
+    private static var refreshProvider: LinkedFolderRefresh.Provider {
+        LinkedFolderRefresh.Provider(
+            resolve: { data in
+                var isStale = false
+#if os(macOS)
+                let options: URL.BookmarkResolutionOptions = [.withSecurityScope]
+#else
+                let options: URL.BookmarkResolutionOptions = []
+#endif
+                let url = try URL(
+                    resolvingBookmarkData: data,
+                    options: options,
+                    bookmarkDataIsStale: &isStale
+                )
+                return .init(url: url.standardizedFileURL, isStale: isStale)
+            },
+            startAccess: { try beginResolvedBookmarkAccess(to: $0) },
+            stopAccess: { $0.stopAccessingSecurityScopedResource() },
+            bookmark: { url in
+#if os(macOS)
+                let options: URL.BookmarkCreationOptions = [.withSecurityScope]
+#else
+                let options: URL.BookmarkCreationOptions = []
+#endif
+                return try url.bookmarkData(
+                    options: options,
+                    includingResourceValuesForKeys: [.nameKey],
+                    relativeTo: nil
+                )
+            },
+            directoryContents: { url in
+                guard let contents = try materializedDirectoryContents(
+                    at: url,
+                    includingPropertiesForKeys: [.nameKey, .isHiddenKey]
+                ) else { throw LinkedFolderRefresh.DirectoryNotReady() }
+                return contents.filter {
+                    $0.isDirectory && (try? $0.resourceValues(forKeys: [.isHiddenKey]))?.isHidden == false
+                }
+            }
+        )
+    }
+
+    @MainActor
+    private static var activeRefreshes: [NSManagedObjectID: (id: UUID, task: Task<ResolvedLocationChange?, Error>)] = [:]
+
+    /// Reads provider data off the context queue, then reconciles a complete,
+    /// still-current result. No managed object is passed to the provider worker.
+    @MainActor
+    @discardableResult
+    static func refreshChildrenOffMain(
+        folderID: NSManagedObjectID,
+        context: NSManagedObjectContext,
+        recursively: Bool = true,
+        provider: LinkedFolderRefresh.Provider? = nil
+    ) async throws -> ResolvedLocationChange? {
+        try Task.checkCancellation()
+        // This entry point belongs to view lifecycle and file-event handlers.
+        // Short context transactions stay on main; provider work never does.
+        guard context.concurrencyType == .mainQueueConcurrencyType else {
+            throw LinkedFolderRefresh.InvalidLocation()
+        }
+        let snapshot = try context.performAndWait { () throws -> (rootID: NSManagedObjectID, request: LinkedFolderRefresh.Request)? in
+            guard !context.hasChanges else { return nil }
+            guard let folder = try refreshFolder(with: folderID, in: context) else { return nil }
+            let root = folder.securityScopeRoot
+            guard let bookmarkData = root.bookmarkData else { throw InvalidScopedURLError() }
+            let request = LinkedFolderRefresh.Request(
+                bookmarkData: bookmarkData,
+                rootURL: root.storedLocation,
+                folderURL: folder.storedLocation,
+                isRoot: root == folder,
+                recursively: recursively,
+                revision: root.refreshRevision()
+            )
+            return (root.objectID, request)
+        }
+        guard let snapshot else { return nil }
+        let rootID = snapshot.rootID
+        activeRefreshes[rootID]?.task.cancel()
+        let refreshID = UUID()
+        let task = Task { @MainActor () throws -> ResolvedLocationChange? in
+            defer {
+                if activeRefreshes[rootID]?.id == refreshID {
+                    activeRefreshes.removeValue(forKey: rootID)
+                }
+            }
+            let plan = try await LinkedFolderRefresh.shared.read(snapshot.request, provider: provider ?? refreshProvider)
+            try Task.checkCancellation()
+
+            let change = try context.performAndWait { () throws -> ResolvedLocationChange? in
+                try Task.checkCancellation()
+                guard !context.hasChanges else { return nil }
+                guard let folder = try refreshFolder(with: folderID, in: context) else { return nil }
+                let root = folder.securityScopeRoot
+                var change: ResolvedLocationChange?
+                do {
+                    try plan.apply(ifCurrent: root.refreshRevision()) {
+                        if let previousURL = root.storedLocation, previousURL != plan.rootURL {
+                            try root.rebasePersistedURLs(from: previousURL, to: plan.rootURL, context: context)
+                            change = .init(oldURL: previousURL, newURL: plan.rootURL)
+                        }
+                        root.url = plan.rootURL
+                        root.filePath = plan.rootURL.filePath
+                        root.bookmarkData = plan.bookmarkData
+
+                        var foldersByURL: [URL: LocalFolder] = [:]
+                        var pending = [root]
+                        var visited: Set<NSManagedObjectID> = []
+                        while let item = pending.popLast() {
+                            guard visited.insert(item.objectID).inserted else { continue }
+                            if let url = item.storedLocation { foldersByURL[url] = item }
+                            pending.append(contentsOf: item.children?.allObjects.compactMap { $0 as? LocalFolder } ?? [])
+                        }
+
+                        for directory in plan.directories {
+                            guard let parent = foldersByURL[directory.url] else { continue }
+                            let children = parent.children?.allObjects.compactMap { $0 as? LocalFolder } ?? []
+                            let presentURLs = Set(directory.children)
+                            for missing in children where !presentURLs.contains(missing.storedLocation ?? directory.url) {
+                                var removed = [missing]
+                                var removedIDs: Set<NSManagedObjectID> = []
+                                while let item = removed.popLast() {
+                                    guard removedIDs.insert(item.objectID).inserted else { continue }
+                                    removed.append(contentsOf: item.children?.allObjects.compactMap { $0 as? LocalFolder } ?? [])
+                                    context.delete(item)
+                                }
+                            }
+
+                            for url in directory.children {
+                                if let existing = foldersByURL[url], !existing.isDeleted { continue }
+                                let fetch = NSFetchRequest<LocalFolder>(entityName: "LocalFolder")
+                                fetch.predicate = NSPredicate(format: "filePath == %@", url.filePath)
+                                fetch.fetchLimit = 1
+                                let child: LocalFolder
+                                if let existing = try context.fetch(fetch).first {
+                                    child = existing
+                                } else {
+                                    guard let bookmark = plan.newFolderBookmarks[url] else { throw InvalidScopedURLError() }
+                                    child = LocalFolder(context: context)
+                                    child.url = url
+                                    child.filePath = url.filePath
+                                    child.importedAt = Date()
+                                    child.bookmarkData = bookmark
+                                }
+                                child.parent = parent
+                                foldersByURL[url] = child
+                            }
+                        }
+                        if context.hasChanges { try context.save() }
+                    }
+                } catch {
+                    // The transaction started clean, so rollback cannot discard caller edits.
+                    context.rollback()
+                    throw error
+                }
+                return change
+            }
+            if let change {
+                rebaseLocalFileIDs(from: change.oldURL, to: change.newURL)
+                NotificationCenter.default.post(
+                    name: .localFolderResolvedLocationDidChange,
+                    object: rootID,
+                    userInfo: [
+                        LocalFolderLocationChangeUserInfoKey.oldURL: change.oldURL,
+                        LocalFolderLocationChangeUserInfoKey.newURL: change.newURL,
+                    ]
+                )
+            }
+            return change
+        }
+        activeRefreshes[rootID] = (refreshID, task)
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private static func refreshFolder(
+        with folderID: NSManagedObjectID,
+        in context: NSManagedObjectContext
+    ) throws -> LocalFolder? {
+        let request = NSFetchRequest<LocalFolder>(entityName: "LocalFolder")
+        request.predicate = NSPredicate(format: "SELF == %@", folderID)
+        request.fetchLimit = 1
+        return try context.fetch(request).first
+    }
+
+    private var storedLocation: URL? {
+        (url ?? filePath.map { URL(fileURLWithPath: $0) })?.standardizedFileURL
+    }
+
+    private func refreshRevision() -> [LinkedFolderRefresh.FolderState] {
+        var result: [LinkedFolderRefresh.FolderState] = []
+        var pending = [self]
+        var visited: Set<NSManagedObjectID> = []
+        while let folder = pending.popLast() {
+            guard visited.insert(folder.objectID).inserted else { continue }
+            result.append(.init(
+                identifier: folder.objectID.uriRepresentation(),
+                parentIdentifier: folder.parent?.objectID.uriRepresentation(),
+                url: folder.url,
+                filePath: folder.filePath,
+                bookmarkData: folder.bookmarkData
+            ))
+            pending.append(contentsOf: folder.children?.allObjects.compactMap { $0 as? LocalFolder } ?? [])
+        }
+        return result.sorted { $0.identifier.absoluteString < $1.identifier.absoluteString }
     }
     
     private struct InvalidScopedURLError: Error {}
