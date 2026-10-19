@@ -36,7 +36,9 @@ enum TemporaryFileActions {
         let sequence = closeSequences[key] ?? TemporaryFileCloseSequence()
         closeSequences[key] = sequence
         defer {
-            if sequence.isIdle { closeSequences.removeValue(forKey: key) }
+            if sequence.isIdle, closeSequences[key] === sequence {
+                closeSequences.removeValue(forKey: key)
+            }
         }
         return await sequence.perform {
             guard !Task.isCancelled else { return false }

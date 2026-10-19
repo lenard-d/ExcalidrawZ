@@ -247,4 +247,82 @@ final class TemporaryFileCloseTests: XCTestCase {
         await gate.release()
         _ = try await boundedSaveTestValue(first)
     }
+    @MainActor func testCancelledWaiterCannotRemoveActiveReplacementClose() async throws {
+        // Vary task priority to exercise delayed cleanup after replacement admission.
+        for iteration in 0..<100 {
+            let state = FileState([a, b, c], active: .temporaryFile(a))
+            let firstGate = SaveTestGate()
+            let replacementGate = SaveTestGate()
+            var transitionCount = 0
+            state.transition = { _ in
+                transitionCount += 1
+                if transitionCount == 1 { try? await firstGate.pause() }
+                if transitionCount == 2 { try? await replacementGate.pause() }
+                return true
+            }
+            let first = Task(priority: .high) {
+                await TemporaryFileActions.close([self.a], fileState: state)
+            }
+            addTeardownBlock {
+                first.cancel()
+                await firstGate.release()
+                await replacementGate.release()
+            }
+            try await firstGate.waitUntilPaused()
+            let queuedStarted = XCTestExpectation(description: "Canceled closes entered")
+            queuedStarted.expectedFulfillmentCount = 30
+            let canceled = (0..<30).map { _ in Task(priority: .background) {
+                queuedStarted.fulfill()
+                return await TemporaryFileActions.close([self.c], fileState: state)
+            } }
+            addTeardownBlock {
+                for task in canceled { task.cancel() }
+                await firstGate.release()
+                await replacementGate.release()
+            }
+            let queuedDidStart = await XCTWaiter.fulfillment(of: [queuedStarted], timeout: 1)
+            XCTAssertEqual(queuedDidStart, .completed)
+            for task in canceled { task.cancel() }
+            await firstGate.release()
+            let replacement = Task(priority: .high) {
+                _ = try await boundedSaveTestValue(first)
+                return await TemporaryFileActions.close([self.b], fileState: state)
+            }
+            addTeardownBlock { replacement.cancel(); await replacementGate.release() }
+            try await replacementGate.waitUntilPaused()
+            for task in canceled {
+                let accepted = try await boundedSaveTestValue(task)
+                XCTAssertFalse(accepted)
+            }
+            let destinationStarted = XCTestExpectation(description: "Destination close entered")
+            let destinationFinished = XCTestExpectation(description: "Destination waits for replacement")
+            destinationFinished.isInverted = true
+            var bypassed = false
+            let destination = Task {
+                destinationStarted.fulfill()
+                let accepted = await TemporaryFileActions.close([self.c], fileState: state)
+                bypassed = true
+                destinationFinished.fulfill()
+                return accepted
+            }
+            addTeardownBlock { destination.cancel(); await replacementGate.release() }
+            let destinationDidStart = await XCTWaiter.fulfillment(of: [destinationStarted], timeout: 1)
+            XCTAssertEqual(destinationDidStart, .completed)
+            let destinationDidWait = await XCTWaiter.fulfillment(of: [destinationFinished], timeout: 0.005)
+            XCTAssertEqual(destinationDidWait, .completed, "Replacement turn bypassed at iteration \(iteration)")
+            let completedBeforeRelease = bypassed
+            XCTAssertEqual(state.temporaryFiles, [b, c])
+            XCTAssertEqual(state.deletedConversations, [a])
+            await replacementGate.release()
+            let replacementAccepted = try await boundedSaveTestValue(replacement)
+            let destinationAccepted = try await boundedSaveTestValue(destination)
+            XCTAssertTrue(replacementAccepted)
+            XCTAssertTrue(destinationAccepted)
+            XCTAssertNil(state.currentActiveFile)
+            XCTAssertTrue(state.temporaryFiles.isEmpty)
+            XCTAssertEqual(state.deletedConversations, [a, b, c])
+            if completedBeforeRelease { return }
+        }
+    }
+
 }
