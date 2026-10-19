@@ -1,7 +1,43 @@
+import Combine
 import XCTest
 @testable import ExcalidrawZ
 
 final class PageModeControllerTests: XCTestCase {
+    @MainActor
+    func testIdleSessionChangeClearsRetainedPagesAndExportWithoutAnotherCommand() async {
+        let changes = PassthroughSubject<Void, Never>()
+        var generation = 1
+        let controller = PageModeController(execute: { _ in
+            #"{"pages":[{"id":"old","title":"Private","width":595,"height":842,"locked":false}],"openedPageID":null}"#
+        }, render: { _, _ in Data() }, isCurrent: { generation == 1 })
+        await controller.perform(.init(action: .list))
+        controller.exportData = Data("private PDF".utf8)
+        controller.observeSessionChanges(changes.eraseToAnyPublisher())
+        let invalidated = expectation(description: "Idle page session invalidated")
+        let observation = controller.$isValid.dropFirst().filter { !$0 }.sink { _ in invalidated.fulfill() }
+        generation = 2
+        changes.send(())
+        await fulfillment(of: [invalidated], timeout: 1)
+        XCTAssertTrue(controller.pages.isEmpty)
+        XCTAssertNil(controller.exportData)
+        withExtendedLifetime(observation) {}
+    }
+
+    @MainActor
+    func testCoreRemovalBroadcastInvalidatesIdleSession() async {
+        let changes = PassthroughSubject<Void, Never>()
+        var hasActiveCore = true
+        let controller = PageModeController(execute: { _ in #"{"pages":[],"openedPageID":null}"# }, render: { _, _ in Data() }, isCurrent: { hasActiveCore })
+        controller.observeSessionChanges(changes.eraseToAnyPublisher())
+        let invalidated = expectation(description: "Removed core invalidates session")
+        let observation = controller.$isValid.dropFirst().filter { !$0 }.sink { _ in invalidated.fulfill() }
+        hasActiveCore = false
+        changes.send(())
+        await fulfillment(of: [invalidated], timeout: 1)
+        XCTAssertFalse(controller.isValid)
+        withExtendedLifetime(observation) {}
+    }
+
     @MainActor
     func testSecondActionCannotOverlapPendingSceneCommand() async throws {
         let entered = expectation(description: "Scene command entered")

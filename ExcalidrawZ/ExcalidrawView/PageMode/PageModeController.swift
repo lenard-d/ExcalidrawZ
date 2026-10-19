@@ -15,6 +15,7 @@ final class PageModeController: ObservableObject {
     private let execute: Execute
     private let render: Render
     private let isCurrent: @MainActor () -> Bool
+    private var sessionObservation: AnyCancellable?
 
     init(execute: @escaping Execute, render: @escaping Render, isCurrent: @escaping @MainActor () -> Bool) {
         self.execute = execute
@@ -62,6 +63,8 @@ final class PageModeController: ObservableObject {
     }
 
     func invalidate() {
+        sessionObservation?.cancel()
+        sessionObservation = nil
         isValid = false
         pages = []
         exportData = nil
@@ -70,6 +73,13 @@ final class PageModeController: ObservableObject {
 
     func invalidateIfNeeded() {
         if !isCurrent() { invalidate() }
+    }
+
+    func observeSessionChanges(_ changes: AnyPublisher<Void, Never>) {
+        sessionObservation = changes
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.invalidateIfNeeded() }
+        invalidateIfNeeded()
     }
 
     private func beginAction() -> Bool {

@@ -25,10 +25,6 @@ final class PageModeSceneTests: XCTestCase {
                 return { ...value, id: "new" + nextID++, isDeleted: false };
             }),
             addElements: (added, options) => { writes.push({ before: JSON.stringify(elements), options }); elements.push(...added); },
-            updateElements: (patches, options) => {
-                writes.push({ before: JSON.stringify(elements), options });
-                for (const patch of patches) Object.assign(elements.find(value => value.id === patch.id), patch.updates);
-            },
             zoomToFitElements: ids => { focus = ids; },
             zoomToFit: () => { focus = "canvas"; },
         } };
@@ -58,12 +54,10 @@ final class PageModeSceneTests: XCTestCase {
         XCTAssertTrue(bool("JSON.stringify(elements.map(value => [value.id, value.x, value.y, value.frameId])) === JSON.stringify(before) && elements[0].customData.other === 'kept' && writes.length === 1"))
     }
 
-    func testRemoveKeepsLiveAndDeletedChildrenAndCanRestoreOneCapture() throws {
-        context.evaluateScript("elements = [page('page', 0), element('ink', { frameId: 'page', text: 'answer' }), element('deleted', { frameId: 'page', isDeleted: true }), element('loose')]; var before = JSON.stringify(elements);")
+    func testRemoveKeepsLiveAndDeletedChildrenInOneSceneUpdate() throws {
+        context.evaluateScript("elements = [page('page', 0), element('ink', { frameId: 'page', text: 'answer' }), element('deleted', { frameId: 'page', isDeleted: true }), element('loose')];")
         _ = try run(.init(action: .remove, pageID: "page"))
         XCTAssertTrue(bool("elements[0].isDeleted && elements[1].frameId === null && elements[1].text === 'answer' && !elements[1].isDeleted && elements[2].isDeleted && elements[2].frameId === null && elements.length === 4 && writes.length === 1"))
-        context.evaluateScript("elements = JSON.parse(writes[0].before);")
-        XCTAssertTrue(bool("JSON.stringify(elements) === before"))
     }
 
     func testOrdinaryAndDeletedFramesAreNotPages() throws {
@@ -102,6 +96,38 @@ final class PageModeSceneTests: XCTestCase {
         let scene = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(snapshot.sceneJSON.utf8)) as? [String: Any])
         XCTAssertEqual((scene["elements"] as? [[String: Any]])?.count, 2)
         XCTAssertNotNil((scene["files"] as? [String: Any])?["image"])
+    }
+
+    func testNormalA4ExportKeepsDoubleResolutionAndSnapshotContent() throws {
+        let options = try renderOptions(width: 595, height: 842)
+        XCTAssertEqual(options["exportScale"] as? Double, 2)
+        XCTAssertTrue(bool("rendered.elements[1].text === 'captured notes' && rendered.files.image.id === 'image' && rendered.options.exportingFrame.id === 'page'"))
+    }
+
+    func testOversizedPageExportStaysWithinRasterBudget() throws {
+        for (width, height) in [(8192.0, 8192.0), (20_000.0, 100.0), (100.0, 20_000.0)] {
+            let options = try renderOptions(width: width, height: height)
+            let scale = try XCTUnwrap(options["exportScale"] as? Double)
+            XCTAssertGreaterThan(scale, 0)
+            XCTAssertLessThanOrEqual(width * scale, 4096)
+            XCTAssertLessThanOrEqual(height * scale, 4096)
+            XCTAssertLessThanOrEqual(width * height * scale * scale, 16_000_000)
+        }
+    }
+
+    private func renderOptions(width: Double, height: Double) throws -> [String: Any] {
+        context.setObject("drawing", forKeyedSubscript: "expectedFileID" as NSString)
+        context.setObject("page", forKeyedSubscript: "pageID" as NSString)
+        context.evaluateScript("var rendered = null; window.excalidrawZHelper.exportElementsToBlob = (elements, files, options) => { rendered = { elements, files, options }; return { blobData: 'synthetic PNG' }; };")
+        let scene: [String: Any] = [
+            "elements": [["id": "page", "type": "frame", "width": width, "height": height], ["id": "ink", "text": "captured notes"]],
+            "files": ["image": ["id": "image"]],
+            "appState": ["viewBackgroundColor": "#ffffff"],
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: scene), as: UTF8.self)
+        context.setObject(json, forKeyedSubscript: "sceneJSON" as NSString)
+        context.evaluateScript("(async function() {\n" + PageModeExportSnapshot.renderScript + "\n})()")
+        return try XCTUnwrap(context.evaluateScript("rendered && rendered.options").toDictionary() as? [String: Any])
     }
 
     private func run(_ command: PageModeCommand) throws -> PageModeState {

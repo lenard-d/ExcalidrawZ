@@ -42,10 +42,16 @@ struct PageModeExportSnapshot {
     const scene = JSON.parse(sceneJSON);
     const frame = scene.elements.find(element => element.id === pageID && element.type === "frame");
     if (!frame) throw new Error("pageMissing");
+    if (![frame.width, frame.height].every(value => Number.isFinite(value) && value > 0)) {
+        throw new Error("invalidExport");
+    }
+    // Bound raster memory for pages resized on the canvas. Normal A4 stays at 2x.
+    const exportScale = Math.min(2, 4096 / frame.width, 4096 / frame.height,
+        Math.sqrt(16_000_000 / (frame.width * frame.height)));
     const result = await helper.exportElementsToBlob(scene.elements, scene.files, {
         exportingFrame: frame,
         mimeType: "image/png",
-        exportScale: 2,
+        exportScale,
         withBackground: true,
         exportWithDarkMode: false,
         viewBackgroundColor: scene.appState.viewBackgroundColor || "#ffffff",
