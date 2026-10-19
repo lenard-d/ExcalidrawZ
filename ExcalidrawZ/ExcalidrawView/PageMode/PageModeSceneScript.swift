@@ -45,6 +45,17 @@ enum PageModeSceneScript {
         excalidrawZPage: { ...metadata(page), version: 1, order: index },
     });
     const capture = { captureUpdate: "IMMEDIATELY" };
+    // Keep the live objects intact until updateScene captures the undo change.
+    const updatePages = patches => {
+        const updates = new Map(patches.map(patch => [patch.id, patch.updates]));
+        const elements = all.map(element => {
+            if (!updates.has(element.id)) return element;
+            const copy = { ...element };
+            api.mutateElement(copy, updates.get(element.id), false);
+            return copy;
+        });
+        api.updateScene({ elements, ...capture });
+    };
 
     switch (command.action) {
         case "list":
@@ -65,7 +76,7 @@ enum PageModeSceneScript {
             const x = pages.length ? pages[pages.length - 1].x : 0;
             const y = bottom + 80;
             if (!Number.isFinite(y) || Math.abs(y) > 1e8) throw new Error("There is no space for another page here.");
-            const created = helper.createElements([{ type: "frame", x, y, width, height, name: command.title || "" }]);
+            const created = helper.createElements([{ type: "frame", x, y, width, height, name: command.title || "", children: [] }]);
             if (created.length !== 1 || created[0].type !== "frame") throw new Error("The page could not be created.");
             const frame = created[0];
             const highestOrder = pages.reduce((highest, page) => Math.max(highest, Number.isFinite(order(page)) ? order(page) : 0), -1);
@@ -79,7 +90,7 @@ enum PageModeSceneScript {
             assertEditable(page);
             const title = typeof command.title === "string" ? command.title.trim() : "";
             if (!title || title.length > 120) throw new Error("Use a page title with 1 to 120 characters.");
-            helper.updateElements([{ id: page.id, updates: { name: title } }], capture);
+            updatePages([{ id: page.id, updates: { name: title } }]);
             return JSON.stringify({ pages: pages.map(item => describe(item.id === page.id ? { ...item, name: title } : item)), openedPageID: null });
         }
         case "move": {
@@ -91,17 +102,17 @@ enum PageModeSceneScript {
             pages.forEach(assertEditable);
             pages.splice(index, 1);
             pages.splice(target, 0, page);
-            helper.updateElements(pages.map((item, index) => ({ id: item.id, updates: { customData: pageData(item, index) } })), capture);
+            updatePages(pages.map((item, index) => ({ id: item.id, updates: { customData: pageData(item, index) } })));
             return state(null);
         }
         case "remove": {
             const page = getPage();
             assertEditable(page);
             const children = all.filter(element => element.frameId === page.id);
-            helper.updateElements([
+            updatePages([
                 { id: page.id, updates: { isDeleted: true } },
                 ...children.map(element => ({ id: element.id, updates: { frameId: null } })),
-            ], capture);
+            ]);
             pages.splice(pages.indexOf(page), 1);
             return state(null);
         }
