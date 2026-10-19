@@ -83,6 +83,7 @@ struct LocalFolderMenuProvider: View {
     }
 
     private func createSubfolder(name: String) {
+        let folderID = folder.objectID
         Task {
             do {
                 try await folder.withSecurityScopedURL { scopedURL async throws in
@@ -92,8 +93,8 @@ struct LocalFolderMenuProvider: View {
                         withIntermediateDirectories: false
                     )
                 }
-                try await MainActor.run {
-                    try folder.refreshChildren(context: viewContext)
+                try await LocalFolder.refreshChildrenOffMain(folderID: folderID, context: viewContext)
+                await MainActor.run {
                     localFolderState.objectWillChange.send()
                     localFolderState.refreshFilesPublisher.send()
                 }
