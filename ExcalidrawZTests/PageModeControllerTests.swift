@@ -41,6 +41,27 @@ final class PageModeControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testDocumentSwitchWhileCommandThrowsClearsRetainedContent() async {
+        var current = true
+        var shouldFail = false
+        let controller = PageModeController(execute: { _ in
+            if shouldFail {
+                current = false
+                throw PageModeError.documentChanged
+            }
+            return #"{"pages":[{"id":"old","title":"Private","width":595,"height":842,"locked":false}],"openedPageID":null}"#
+        }, render: { _, _ in Data() }, isCurrent: { current })
+        await controller.perform(.init(action: .list))
+        controller.exportData = Data("private".utf8)
+        shouldFail = true
+        await controller.perform(.init(action: .rename, pageID: "old", title: "New"))
+        XCTAssertFalse(controller.isValid)
+        XCTAssertTrue(controller.pages.isEmpty)
+        XCTAssertNil(controller.exportData)
+        XCTAssertNil(controller.errorMessage)
+    }
+
+    @MainActor
     func testMutationFailureIsVisibleAndDoesNotReplacePageList() async {
         var shouldFail = false
         let controller = PageModeController(execute: { _ in

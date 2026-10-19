@@ -37,11 +37,11 @@ struct PageModeExportSnapshot {
     static let renderScript = #"""
     const helper = window.excalidrawZHelper;
     if (!helper?._api || helper.currentFileId !== expectedFileID) {
-        throw new Error("The drawing changed. Open Pages again to continue.");
+        throw new Error("documentChanged");
     }
     const scene = JSON.parse(sceneJSON);
     const frame = scene.elements.find(element => element.id === pageID && element.type === "frame");
-    if (!frame) throw new Error("This page is no longer available.");
+    if (!frame) throw new Error("pageMissing");
     const result = await helper.exportElementsToBlob(scene.elements, scene.files, {
         exportingFrame: frame,
         mimeType: "image/png",
