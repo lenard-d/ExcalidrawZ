@@ -16,11 +16,15 @@ import Foundation
         transitionCalls.append(file)
         guard await transition(file) else { return false }
         currentActiveFile = file
+        if case .temporaryFile(let url) = file, !temporaryFiles.contains(url) {
+            temporaryFiles.append(url)
+        }
         return true
     }
 }
 
 @MainActor enum TemporaryFileActions {
+    // INSERT SEQUENCE STORAGE
     // INSERT CLOSE
     private static func deleteAIConversations(for files: [URL]) {
         FileState.current.deletedConversations.formUnion(files)

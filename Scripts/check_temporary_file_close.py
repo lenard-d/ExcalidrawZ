@@ -32,7 +32,7 @@ def read_source(root: Path, revision: str | None) -> str:
     return (root / SOURCE).read_text()
 
 
-def prepare_package(root: Path, work: Path, method: str) -> None:
+def prepare_package(root: Path, work: Path, source: str) -> None:
     (work / "Package.swift").write_text('''// swift-tools-version: 5.9
 import PackageDescription
 let package = Package(name: "TemporaryCloseProbe", platforms: [.macOS(.v13)], targets: [
@@ -43,7 +43,15 @@ let package = Package(name: "TemporaryCloseProbe", platforms: [.macOS(.v13)], ta
     sources = work / "Sources/ExcalidrawZ"
     sources.mkdir(parents=True)
     template = (root / "Scripts/TemporaryFileCloseScaffold.swift").read_text()
-    (sources / "TemporaryClose.swift").write_text(template.replace("// INSERT CLOSE", method))
+    storage = next(
+        (line for line in source.splitlines() if "private static var closeSequences:" in line), ""
+    )
+    compiled = template.replace("    // INSERT SEQUENCE STORAGE", storage)
+    (sources / "TemporaryClose.swift").write_text(compiled.replace("// INSERT CLOSE", close_method(source)))
+    sequence = root / "ExcalidrawZ/Sidebar/Temporary/TemporaryFileCloseSequence.swift"
+    shutil.copyfile(sequence, sources / sequence.name)
+    print("Sequence SHA256:", hashlib.sha256(sequence.read_bytes()).hexdigest(), flush=True)
+    print("Sequence storage SHA256:", hashlib.sha256(storage.encode()).hexdigest(), flush=True)
     tests = work / "Tests/ExcalidrawZTests"
     tests.mkdir(parents=True)
     shutil.copyfile(root / "Scripts/TemporaryFileCloseTests.swift", tests / "TemporaryFileCloseTests.swift")
@@ -61,7 +69,7 @@ def main() -> None:
     print("Exact close method SHA256:", hashlib.sha256(method.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="excalidrawz-temporary-close-") as directory:
         work = Path(directory)
-        prepare_package(root, work, method)
+        prepare_package(root, work, source)
         subprocess.run(
             ["swift", "test", "--package-path", str(work), "--scratch-path", str(work / "build"),
              "--cache-path", str(work / "cache"), "--config-path", str(work / "config"),
