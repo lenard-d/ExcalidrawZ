@@ -22,17 +22,19 @@ import AppKit
 final class ApplicationTerminationCanvasFlushCoordinator {
     static let shared = ApplicationTerminationCanvasFlushCoordinator()
 
-    private weak var fileState: FileState?
+    private let saves = ExternalSaveTerminationCoordinator()
 
     private init() {}
 
     func register(fileState: FileState) {
-        self.fileState = fileState
+        saves.register(fileState)
     }
 
-    func flushPendingCanvasSnapshot() async {
-        await fileState?.flushPendingCanvasSnapshotBeforeTermination()
+    func flushPendingCanvasSnapshot() async -> Bool {
+        await saves.flush()
     }
+
+    var canConfirmTermination: Bool { saves.canConfirmTermination }
 }
 
 @MainActor
@@ -109,11 +111,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleTerminationSheetIfNeeded(for: sender)
         terminationTask = Task { @MainActor [weak self, weak sender] in
             guard let self, let sender else { return }
-            await prepareForApplicationTermination()
+            let canTerminate = await prepareForApplicationTermination()
             guard !Task.isCancelled, isHandlingApplicationTermination else {
                 return
             }
-            finishTerminationRequest(sender, shouldTerminate: true)
+            finishTerminationRequest(sender, shouldTerminate: canTerminate)
         }
         return .terminateLater
     }
@@ -177,22 +179,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func prepareForApplicationTermination() async {
-        guard !Task.isCancelled else { return }
+    private func prepareForApplicationTermination() async -> Bool {
+        guard !Task.isCancelled else { return false }
         updateTerminationStage(.screenAnnotationSaves)
         await ScreenAnnotationSaveTaskManager.shared.waitUntilIdle()
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
         updateTerminationStage(.backgroundDocumentOperations)
         await OffscreenExcalidrawEditor.waitForPendingOperations()
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
         updateTerminationStage(.currentDrawing)
-        await ApplicationTerminationCanvasFlushCoordinator.shared.flushPendingCanvasSnapshot()
-        guard !Task.isCancelled else { return }
+        guard await ApplicationTerminationCanvasFlushCoordinator.shared.flushPendingCanvasSnapshot() else { return false }
+        guard !Task.isCancelled else { return false }
         updateTerminationStage(.applicationData)
         PersistenceController.shared.save()
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
         updateTerminationStage(.backup)
         await backupFilesBeforeTermination()
+        return !Task.isCancelled && ApplicationTerminationCanvasFlushCoordinator.shared.canConfirmTermination
     }
 
     @MainActor
