@@ -65,9 +65,12 @@ final class UserDrawingSettingsBridgeTests: XCTestCase {
 
         let state = CanvasDrawingSettingsState()
         state.coordinator = core
-        let file = Data(#"{"appState":{}}"#.utf8)
+        let file = Data(##"{"appState":{"currentItemStrokeColor":"#112233"}}"##.utf8)
+        let noEcho = expectation(description: "Changed inbound settings must not echo")
+        noEcho.isInverted = true
+        core.webView.onCall = { noEcho.fulfill() }
         state.apply(UserDrawingSettings.from(fileContent: file))
-        for _ in 0..<10 { await Task.yield() }
+        await fulfillment(of: [noEcho], timeout: 0.2)
         XCTAssertTrue(core.webView.payloads.isEmpty, "Inbound file settings must not echo")
 
         let sent = expectation(description: "Canvas edit reaches native settings helper")
