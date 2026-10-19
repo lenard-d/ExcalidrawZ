@@ -15,6 +15,7 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
     @State private var isMathInputSheetPresented = false
     @State private var isMermaidInputSheetPresented = false
     @State private var isPDFPickerPresented = false
+    @State private var isPageModeSheetPresented = false
 
     var body: some View {
         Menu {
@@ -46,6 +47,10 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
             } label: {
                 Text(localizable: .toolbarInsertPDF)
             }
+
+            Button(String(localized: "Pages")) {
+                isPageModeSheetPresented = true
+            }
         } label: {
             if #available(macOS 15.0, iOS 18.0, *) {
                 Label(.localizable(.toolbarMoreTools), systemImage: "xmark.triangle.circle.square")
@@ -62,5 +67,6 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
         .modifier(MermaidInputSheetViewModifier(isPresented: $isMermaidInputSheetPresented))
         .modifier(MathInputSheetViewModifier(isPresented: $isMathInputSheetPresented))
         .modifier(PDFInsertSheetViewModifier(isPresented: $isPDFPickerPresented))
+        .modifier(PageModeSheetModifier(isPresented: $isPageModeSheetPresented))
     }
 }
