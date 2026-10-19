@@ -1,6 +1,9 @@
 import CoreData
 import SwiftUI
 import XCTest
+#if targetEnvironment(simulator)
+import UIKit
+#endif
 @testable import ExcalidrawZ
 
 final class FileCheckpointPreviewProtectionTests: XCTestCase {
@@ -95,3 +98,205 @@ final class FileCheckpointPreviewProtectionTests: XCTestCase {
         return entity
     }
 }
+
+#if targetEnvironment(simulator)
+@MainActor
+final class FileCheckpointPreviewRelockTests: XCTestCase {
+    func testRelockRemovesWarmLibraryPreviewVersionsInBothAppearances() async throws {
+        try await withFixture { fixture in
+            var versions: [String] = []
+            for revision in [1.0, 2.0] {
+                fixture.checkpoint.updatedAt = Date(timeIntervalSinceReferenceDate: revision)
+                let id = fixture.trackCurrentPreview()
+                versions.append(id)
+                for scheme in [ColorScheme.light, .dark] {
+                    FileItemPreviewCache.shared.setObject(
+                        UIImage(), forKey: FileItemPreviewCache.cacheKey(forID: id, colorScheme: scheme)
+                    )
+                }
+                fixture.coordinator.request(checkpoint: fixture.checkpoint, colorScheme: .light)
+                XCTAssertNotNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .light))
+            }
+
+            await fixture.relock()
+
+            for id in versions {
+                XCTAssertNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .light))
+                XCTAssertNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .dark))
+            }
+        }
+    }
+
+    func testExportFromBeforeRelockCannotPublishAfterUnlock() async throws {
+        let gate = ExportGate()
+        try await withFixture(exportPNG: gate.export) { fixture in
+            defer { gate.release() }
+            let id = fixture.trackCurrentPreview()
+            fixture.coordinator.request(checkpoint: fixture.checkpoint, colorScheme: .light)
+            await fulfillment(of: [gate.started], timeout: 5)
+            XCTAssertEqual(gate.callCount, 1)
+
+            await fixture.relock()
+            try await fixture.unlock()
+            gate.release()
+            await fixture.coordinator.waitForPendingPreviewWork()
+
+            XCTAssertNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .light))
+            XCTAssertNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .dark))
+        }
+    }
+
+    func testRequestAfterUnlockSurvivesInvalidatedExportStillInFlight() async throws {
+        let gate = ExportGate()
+        try await withFixture(exportPNG: gate.export) { fixture in
+            defer { gate.release() }
+            let id = fixture.trackCurrentPreview()
+            fixture.coordinator.request(checkpoint: fixture.checkpoint, colorScheme: .light)
+            await fulfillment(of: [gate.started], timeout: 5)
+
+            await fixture.relock()
+            try await fixture.unlock()
+            fixture.coordinator.request(checkpoint: fixture.checkpoint, colorScheme: .light)
+            gate.release()
+            await fixture.coordinator.waitForPendingPreviewWork()
+
+            XCTAssertEqual(gate.callCount, 2)
+            XCTAssertNotNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .light))
+        }
+    }
+
+    private func withFixture(
+        exportPNG: @escaping @MainActor (ExcalidrawFile, ColorScheme) async throws -> Data = { _, _ in
+            FileCheckpointPreviewRelockTests.previewPNG()
+        },
+        body: (Fixture) async throws -> Void
+    ) async throws {
+        guard ProcessInfo.processInfo.environment["EXCALIDRAWZ_ISOLATED_HISTORY_TESTS"] == "1" else {
+            throw XCTSkip("Requires an audited, fresh isolated simulator and explicit opt-in.")
+        }
+        let fixture = try await Fixture(exportPNG: exportPNG)
+        do {
+            try await body(fixture)
+        } catch {
+            try? await fixture.cleanUp()
+            throw error
+        }
+        try await fixture.cleanUp()
+    }
+
+    @MainActor
+    private final class ExportGate {
+        let started = XCTestExpectation(description: "Actual checkpoint export started")
+        private(set) var callCount = 0
+        private var continuation: CheckedContinuation<Data, Never>?
+        private var isReleased = false
+
+        func export(_ file: ExcalidrawFile, _ scheme: ColorScheme) async throws -> Data {
+            guard file.id.hasPrefix("checkpoint:") else {
+                return FileCheckpointPreviewRelockTests.previewPNG()
+            }
+            callCount += 1
+            guard callCount == 1, !isReleased else {
+                return FileCheckpointPreviewRelockTests.previewPNG()
+            }
+            return await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                started.fulfill()
+            }
+        }
+
+        func release() {
+            isReleased = true
+            continuation?.resume(returning: FileCheckpointPreviewRelockTests.previewPNG())
+            continuation = nil
+        }
+    }
+
+    @MainActor
+    private final class Fixture {
+        let file: File
+        let checkpoint: FileCheckpoint
+        let state = LockedContentStateStore()
+        let fileState = FileState()
+        let coordinator: FileCoverCacheCoordinator
+        private let context: NSManagedObjectContext
+        private let key: RecoveryKey
+        private var previewIDs: Set<String> = []
+
+        init(exportPNG: @escaping @MainActor (ExcalidrawFile, ColorScheme) async throws -> Data) async throws {
+            // The caller's opt-in gate runs before this touches app persistence.
+            context = PersistenceController.shared.container.viewContext
+            key = try RecoveryKeyService.generate()
+            let content = Data(#"{"type":"excalidraw","elements":[],"appState":{},"files":{}}"#.utf8)
+            let fileID = UUID()
+            let checkpointID = UUID()
+            let fileContent = try EncryptedContentService.encryptAndVerifyRecovery(
+                content, contentType: "file", contentID: fileID.uuidString, recoveryKey: key
+            )
+            let checkpointContent = try EncryptedContentService.encryptAndVerifyRecovery(
+                content, contentType: "fileCheckpoint", contentID: checkpointID.uuidString, recoveryKey: key
+            )
+            file = File(context: context)
+            file.id = fileID
+            file.name = "Synthetic history privacy test"
+            file.content = fileContent
+            file.inTrash = false
+            checkpoint = FileCheckpoint(context: context)
+            checkpoint.id = checkpointID
+            checkpoint.updatedAt = Date(timeIntervalSinceReferenceDate: 1)
+            checkpoint.content = checkpointContent
+            checkpoint.file = file
+            coordinator = FileCoverCacheCoordinator(
+                fileState: fileState, lockedContentState: state, context: context, exportPNG: exportPNG
+            )
+            try context.save()
+            do {
+                try await unlock()
+            } catch {
+                try? await cleanUp()
+                throw error
+            }
+        }
+
+        func unlock() async throws {
+            _ = try await LockedContentUnlockSession.shared.unlock(
+                file.content!, recoveryKey: key, expectedContentType: "file", expectedContentID: file.id!.uuidString
+            )
+            _ = try await LockedContentUnlockSession.shared.unlock(
+                checkpoint.content!, recoveryKey: key,
+                expectedContentType: "fileCheckpoint", expectedContentID: checkpoint.id!.uuidString
+            )
+            await state.refresh(file: .file(file))
+            XCTAssertEqual(state.previewLockState(for: .file(file)), .temporarilyUnlocked)
+        }
+
+        func relock() async {
+            await state.relockCurrentSession(activeFile: .file(file))
+            XCTAssertEqual(state.previewLockState(for: .file(file)), .locked)
+            coordinator.refreshLibraryCoversForLockStateChange(colorScheme: .light)
+        }
+
+        func trackCurrentPreview() -> String {
+            let id = FileCoverCacheCoordinator.checkpointPreviewID(for: checkpoint)
+            previewIDs.insert(id)
+            return id
+        }
+
+        func cleanUp() async throws {
+            await state.relockCurrentSession(activeFile: nil)
+            await coordinator.waitForPendingPreviewWork()
+            for id in previewIDs { FileItemPreviewCache.shared.removePreviewCache(forID: id) }
+            context.delete(checkpoint)
+            context.delete(file)
+            try context.save()
+        }
+    }
+
+    private static func previewPNG() -> Data {
+        UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }.pngData()!
+    }
+}
+#endif
