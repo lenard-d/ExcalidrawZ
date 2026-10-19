@@ -25,7 +25,9 @@ final class PageModeCanvasBridge {
     }
 
     func makeController() -> PageModeController {
-        PageModeController(execute: { try await self.execute($0) }, render: { try await self.render($0, page: $1) }, isCurrent: { self.isCurrent() })
+        let controller = PageModeController(execute: { try await self.execute($0) }, render: { try await self.render($0, page: $1) }, isCurrent: { self.isCurrent() })
+        controller.observeSessionChanges(core.documentSyncController.canvasMutationSessionChanges)
+        return controller
     }
 
     private func isCurrent() -> Bool {
