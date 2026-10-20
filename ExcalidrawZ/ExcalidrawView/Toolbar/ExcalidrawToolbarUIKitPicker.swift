@@ -63,12 +63,12 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                 }
             }
             control.addTarget(self, action: #selector(commitSelection(_:)), for: .valueChanged)
-            // Keep tap, drag preview, and release in one input path.
+            // Let native tracking animate the glass while the recognizer retains the last tool.
             let scrub = UILongPressGestureRecognizer(target: self, action: #selector(handleScrub(_:)))
             scrub.minimumPressDuration = 0
             scrub.allowableMovement = .greatestFiniteMagnitude
-            scrub.delaysTouchesBegan = true
-            scrub.cancelsTouchesInView = true
+            scrub.delaysTouchesBegan = false
+            scrub.cancelsTouchesInView = false
             control.addGestureRecognizer(scrub)
             return control
         }
@@ -140,8 +140,8 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                 guard let contact, !contact.invalidated else { return }
                 if let index {
                     self.contact?.lastIndex = index
-                    control.selectedSegmentIndex = index
                 }
+                control.selectedSegmentIndex = index ?? contact.lastIndex
             case .ended:
                 if let contact, !contact.invalidated,
                    contact.initialSelection == selection.wrappedValue, control.isEnabled {
