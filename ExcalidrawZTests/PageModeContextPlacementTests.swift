@@ -3,7 +3,7 @@ import XCTest
 
 final class PageModeContextPlacementTests: XCTestCase {
     private let controls = CGSize(width: 280, height: 44)
-    private let viewport = CGSize(width: 1000, height: 800)
+    private let viewport = CGRect(x: 0, y: 0, width: 1000, height: 800)
 
     func testControlsFollowFrameHeaderThroughPanAndZoom() throws {
         let page = PageModePage(id: "page", title: "Notes", width: 595, height: 842, locked: false, x: 20, y: 200)
@@ -28,5 +28,25 @@ final class PageModeContextPlacementTests: XCTestCase {
         }
         XCTAssertEqual(PageModeContextPlacement.origin(page: page, scroll: .zero, zoom: 0.1, viewport: viewport, controls: controls), CGPoint(x: 8, y: 28))
         XCTAssertNil(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: 0, y: -201), zoom: 1, viewport: viewport, controls: controls))
+    }
+
+    func testNativeNavigationDoesNotCoverContextControls() throws {
+        let visible = CGRect(x: 0, y: 86, width: 1076, height: 920)
+        let page = PageModePage(id: "page", title: "Notes", width: 595, height: 842, locked: false, x: 200, y: 110)
+        let origin = try XCTUnwrap(PageModeContextPlacement.origin(page: page, scroll: .zero,
+            zoom: 1, viewport: visible, controls: controls))
+        XCTAssertTrue(visible.contains(CGRect(origin: origin, size: controls)))
+        XCTAssertEqual(origin.y, 118)
+        XCTAssertNil(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: 0, y: -70),
+            zoom: 1, viewport: visible, controls: controls))
+    }
+
+    func testClippedPageKeepsControlsInsideNativeSideInsets() throws {
+        let visible = CGRect(x: 100, y: 86, width: 500, height: 700)
+        let page = PageModePage(id: "page", title: "Notes", width: 595, height: 842, locked: false, x: 550, y: 110)
+        let origin = try XCTUnwrap(PageModeContextPlacement.origin(page: page, scroll: .zero,
+            zoom: 1, viewport: visible, controls: controls))
+        XCTAssertTrue(visible.contains(CGRect(origin: origin, size: controls)))
+        XCTAssertEqual(origin.x, 312)
     }
 }

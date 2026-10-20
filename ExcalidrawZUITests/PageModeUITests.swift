@@ -157,6 +157,12 @@ final class PageModeUITests: XCTestCase {
     private func selectPage(_ title: String, in app: XCUIApplication) throws {
         let header = pageHeader(title, in: app)
         try requireHittable(header, in: app, step: "Select actual \(title) header")
+        guard !app.navigationBars.allElementsBoundByIndex.contains(where: { $0.frame.intersects(header.frame) }) else {
+            capture(app, step: "STOP: \(title) header covered by navigation")
+            throw NSError(domain: "PageModeUITests", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "The page header is behind the native navigation area."
+            ])
+        }
         header.tap()
     }
 

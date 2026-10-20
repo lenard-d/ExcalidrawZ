@@ -48,7 +48,8 @@ enum PageModeSceneScript {
         excalidrawZPage: { ...metadata(page), version: 1, order: index },
     });
     const capture = { captureUpdate: "IMMEDIATELY" };
-    const cameraOptions = { animate: false, canvasOffsets: { top: 40, right: 40, bottom: 40, left: 40 } };
+    // Keep the current native and web controls clear when fitting a page.
+    const cameraOptions = { animate: false };
     const checkedLayout = value => {
         if (!["blank", "grid", "ruled"].includes(value)) throw new Error("invalidLayout");
         return value;
