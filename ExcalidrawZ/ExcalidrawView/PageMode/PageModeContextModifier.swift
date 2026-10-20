@@ -111,12 +111,12 @@ private struct PageModeContextActions: View {
     let zoom: Double
     let viewport: CGRect
     let refresh: () -> Void
-    @State private var controlsHeight: CGFloat = 52
+    @State private var controlsHeight: CGFloat = 44
 
     var body: some View {
         if controller.isValid, selectedIDs.count == 1,
            let page = controller.pages.first(where: { $0.id == selectedIDs[0] }), !page.locked {
-            let size = CGSize(width: min(280, viewport.width - 16), height: controlsHeight)
+            let size = CGSize(width: min(220, viewport.width - 16), height: controlsHeight)
             let origin = PageModeContextPlacement.origin(page: page, scroll: scroll,
                 zoom: zoom, viewport: viewport, controls: size)
             if let origin {
@@ -132,7 +132,7 @@ private struct PageModeContextActions: View {
                             }
                         } label: {
                             Label((page.layout ?? .blank).title, systemImage: "line.3.horizontal")
-                                .frame(minHeight: 44)
+                                .modifier(PageModeContextLabel())
                         }
                         .accessibilityLabel(String(localized: "Page layout"))
                         .accessibilityValue((page.layout ?? .blank).title)
@@ -147,11 +147,11 @@ private struct PageModeContextActions: View {
                             }
                         } label: {
                             Label(String(localized: "New page"), systemImage: "plus")
-                                .frame(minHeight: 44)
+                                .modifier(PageModeContextLabel())
                         }
                         .accessibilityIdentifier("pages.context.add")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.plain)
                     .disabled(controller.isBusy)
                     if let error = controller.errorMessage {
                         Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
@@ -168,7 +168,19 @@ private struct PageModeContextActions: View {
     }
 }
 
+private struct PageModeContextLabel: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.caption)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 4))
+            .frame(minWidth: 44, minHeight: 44, alignment: .bottom)
+            .contentShape(Rectangle())
+    }
+}
+
 private struct PageModeContextHeight: PreferenceKey {
-    static let defaultValue: CGFloat = 52
+    static let defaultValue: CGFloat = 44
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
