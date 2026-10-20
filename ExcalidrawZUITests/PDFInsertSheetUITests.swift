@@ -70,7 +70,7 @@ final class PDFInsertSheetUITests: XCTestCase {
         tiled.tap()
 
         let stepper = app.steppers["pdfInsert.itemsPerLine"]
-        let increment = stepper.buttons["Increment"]
+        let increment = stepper.buttons["pdfInsert.itemsPerLine-Increment"]
         scrollToVisible(increment, in: settings)
         XCTAssertTrue(stepper.exists)
         XCTAssertTrue(settings.frame.contains(increment.frame), "The settings scroll must expose the stepper.")
@@ -123,7 +123,7 @@ final class PDFInsertSheetUITests: XCTestCase {
             assertEnabled(app.buttons["pdfInsert.confirm"])
             let error = app.staticTexts["pdfInsert.error"]
             XCTAssertTrue(error.waitForExistence(timeout: 3))
-            XCTAssertEqual(error.label, "Synthetic insert failure")
+            XCTAssertEqual(error.label, "Failed to load PDF: Synthetic insert failure")
             XCTAssertTrue(app.otherElements["pdfFixture.viewport"].frame.contains(error.frame))
             XCTAssertTrue(error.isHittable)
             assertActions(in: app, size: size)
@@ -185,6 +185,10 @@ final class PDFInsertSheetUITests: XCTestCase {
 
     private func assertInsertCallback(in app: XCUIApplication, options: String = "viewer,vertical,1") {
         XCTAssertEqual(app.staticTexts["pdfFixture.callbackCount"].label, "0")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Selected PDF with reachable Insert and Cancel"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         app.buttons["pdfInsert.confirm"].tap()
         assertCallback(in: app, count: 1, options: options)
     }
