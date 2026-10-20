@@ -14,7 +14,9 @@ let debugLogger = Logger(label: "DEBUG")
 struct RootView: View {
     var body: some View {
 #if DEBUG && os(iOS) && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.environment["EXCALIDRAWZ_PDF_INSERT_UI_TEST"] == "1" {
+        if ProcessInfo.processInfo.environment["EXCALIDRAWZ_PRESENTATION_WELCOME_FIXTURE"] == "1" {
+            PresentationWelcomeUITestFixture()
+        } else if ProcessInfo.processInfo.environment["EXCALIDRAWZ_PDF_INSERT_UI_TEST"] == "1" {
             PDFInsertSheetUITestFixture()
         } else {
             ContentView()

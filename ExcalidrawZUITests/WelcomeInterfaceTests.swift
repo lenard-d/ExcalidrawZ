@@ -42,38 +42,55 @@ final class WelcomeInterfaceTests: XCTestCase {
         let primaryAction = app.buttons["aiChatWelcomePrimaryAction"]
         let details = app.buttons["aiChatWelcomeDetails"]
 
-        scrollTo(details, in: scrollView, towardBottom: true)
+        scrollToHittable(details, in: scrollView, towardBottom: true)
         details.tap()
 
         for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
             XCUIDevice.shared.orientation = orientation
-            let lastFeature = app.descendants(matching: .any)["aiChatWelcomeRevertFeature"].firstMatch
-            scrollTo(lastFeature, in: scrollView, towardBottom: true)
-            XCTAssertTrue(lastFeature.isHittable)
+            let lastFeature = scrollView.descendants(matching: .any)
+                .matching(identifier: "aiChatWelcomeRevertFeature")
+                .matching(NSPredicate(
+                    format: "label CONTAINS %@ AND label CONTAINS %@",
+                    "Revert any turn",
+                    "Every AI edit is checkpointed — roll back instantly if you don't like it."
+                ))
+                .firstMatch
+            scrollToReadableContent(lastFeature, in: scrollView, app: app)
 
-            scrollTo(primaryAction, in: scrollView, towardBottom: false)
+            scrollToHittable(primaryAction, in: scrollView, towardBottom: false)
             XCTAssertTrue(primaryAction.isHittable)
+            primaryAction.tap()
+            assertConsentIsRequired(in: app)
+            app.buttons["Cancel"].tap()
+            XCTAssertTrue(primaryAction.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["Send message"].exists)
         }
-
-        primaryAction.tap()
-        assertConsentIsRequired(in: app)
     }
 
     func testPresentationWelcomePlanAndActionRemainReachableAtLargeText() {
-        let app = openDrawing(orientation: .landscapeLeft, largeText: true)
-        let presentation = app.buttons["Presentation"].firstMatch
-        XCTAssertTrue(presentation.waitForExistence(timeout: 15))
-        presentation.tap()
+        let app = launchApp(
+            orientation: .landscapeLeft,
+            largeText: true,
+            presentationWelcomeFixture: true
+        )
 
         let scrollView = app.scrollViews["presentationWelcomeScrollView"]
         XCTAssertTrue(scrollView.waitForExistence(timeout: 5))
         let planCaption = app.staticTexts["presentationWelcomePlanCaption"]
         let primaryAction = app.buttons["presentationWelcomePrimaryAction"]
 
-        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+        for (index, orientation) in [UIDeviceOrientation.landscapeLeft, .portrait].enumerated() {
             XCUIDevice.shared.orientation = orientation
-            scrollTo(planCaption, in: scrollView, towardBottom: true)
-            scrollTo(primaryAction, in: scrollView, towardBottom: false)
+            scrollToReadableContent(planCaption, in: scrollView, app: app)
+            scrollToHittable(primaryAction, in: scrollView, towardBottom: false)
+            XCTAssertTrue(primaryAction.isHittable)
+            primaryAction.tap()
+
+            let result = app.alerts["Upgrade action received"]
+            XCTAssertTrue(result.waitForExistence(timeout: 5))
+            XCTAssertTrue(result.staticTexts["Request \(index + 1)"].exists)
+            result.buttons["OK"].tap()
+            XCTAssertTrue(primaryAction.waitForExistence(timeout: 5))
         }
     }
 
@@ -93,6 +110,24 @@ final class WelcomeInterfaceTests: XCTestCase {
         orientation: UIDeviceOrientation,
         largeText: Bool = false
     ) -> XCUIApplication {
+        let app = launchApp(orientation: orientation, largeText: largeText)
+        dismissStartupSheet(in: app)
+
+        let newDrawing = app.buttons["New draw"].firstMatch
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: newDrawing
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+        newDrawing.tap()
+        return app
+    }
+
+    private func launchApp(
+        orientation: UIDeviceOrientation,
+        largeText: Bool,
+        presentationWelcomeFixture: Bool = false
+    ) -> XCUIApplication {
         XCUIDevice.shared.orientation = orientation
         let app = XCUIApplication()
         app.launchArguments = [
@@ -108,17 +143,11 @@ final class WelcomeInterfaceTests: XCTestCase {
                 "UICTContentSizeCategoryAccessibilityXXXL"
             ]
         }
+        if presentationWelcomeFixture {
+            app.launchEnvironment["EXCALIDRAWZ_PRESENTATION_WELCOME_FIXTURE"] = "1"
+        }
         launchedApp = app
         app.launch()
-        dismissStartupSheet(in: app)
-
-        let newDrawing = app.buttons["New draw"].firstMatch
-        let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isHittable == true"),
-            object: newDrawing
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
-        newDrawing.tap()
         return app
     }
 
@@ -141,7 +170,7 @@ final class WelcomeInterfaceTests: XCTestCase {
         XCTAssertFalse(enable.isEnabled)
     }
 
-    private func scrollTo(
+    private func scrollToHittable(
         _ element: XCUIElement,
         in scrollView: XCUIElement,
         towardBottom: Bool
@@ -155,6 +184,36 @@ final class WelcomeInterfaceTests: XCTestCase {
             }
         }
         XCTAssertTrue(element.isHittable, "Welcome content must remain reachable by scrolling.")
+    }
+
+    private func scrollToReadableContent(
+        _ element: XCUIElement,
+        in scrollView: XCUIElement,
+        app: XCUIApplication
+    ) {
+        // Static text can be readable without providing an XCTest hit point.
+        func isFullyVisible() -> Bool {
+            guard element.exists else { return false }
+            let frame = element.frame
+            let viewport = scrollView.frame.intersection(app.windows.firstMatch.frame)
+            return !frame.isEmpty && !viewport.isEmpty
+                && viewport.insetBy(dx: -1, dy: -1).contains(frame)
+        }
+
+        for _ in 0..<8 {
+            if isFullyVisible() { return }
+            scrollView.swipeUp()
+        }
+        if !isFullyVisible() {
+            let hierarchy = XCTAttachment(string: app.debugDescription)
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            let elementFrame = element.exists ? "\(element.frame)" : "missing"
+            XCTFail("The complete welcome text must fit inside the on-screen scroll viewport. Element: \(elementFrame), scroll view: \(scrollView.frame), window: \(app.windows.firstMatch.frame).")
+        }
     }
 }
 #endif
