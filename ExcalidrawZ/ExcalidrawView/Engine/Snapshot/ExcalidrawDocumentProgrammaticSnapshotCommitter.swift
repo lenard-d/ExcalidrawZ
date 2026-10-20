@@ -24,7 +24,11 @@ final class ExcalidrawDocumentProgrammaticSnapshotCommitter: @unchecked Sendable
         operation: @escaping @MainActor () async throws -> Void
     ) async throws {
         delegate?.snapshotCoordinatorCore?.parent?.fileState.noteProgrammaticCanvasMutation(fileID: session.fileID)
-        defer { schedule(reason: reason) }
+        defer {
+            if delegate?.snapshotCoordinatorCore?.documentSyncController.isCurrentCanvasMutationSession(session) == true {
+                schedule(reason: reason)
+            }
+        }
         try await mutations.perform(in: session, operation: operation)
     }
 
