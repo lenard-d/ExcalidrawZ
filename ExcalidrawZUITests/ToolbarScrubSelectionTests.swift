@@ -130,6 +130,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let originalFrame = lock.frame
         XCTAssertEqual(originalFrame.width, menu.frame.width, accuracy: 1)
         XCTAssertEqual(originalFrame.height, menu.frame.height, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(originalFrame.width, 44)
         XCTAssertGreaterThanOrEqual(originalFrame.height, 44)
 
         let initialLockState = lock.isSelected
