@@ -34,22 +34,36 @@ struct ExcalidrawToolbarToolOrder: Equatable, Hashable {
     ]
 
     var tools: [ExcalidrawTool]
+    private(set) var directToolCount: Int
 
-    init(tools: [ExcalidrawTool] = Self.defaultTools) {
+    init(tools: [ExcalidrawTool] = Self.defaultTools, directToolCount: Int = 9) {
         self.tools = Self.normalized(tools)
+        self.directToolCount = min(max(directToolCount, 1), self.tools.count)
     }
 
     init(storedData: Data) {
-        guard !storedData.isEmpty,
-              let ids = try? JSONDecoder().decode([String].self, from: storedData) else {
-            self.init()
+        let decoder = JSONDecoder()
+        if let stored = try? decoder.decode(StoredOrder.self, from: storedData) {
+            self.init(
+                tools: stored.tools.compactMap(ExcalidrawTool.init(toolbarOrderID:)),
+                directToolCount: stored.directToolCount
+            )
             return
         }
+        let ids = (try? decoder.decode([String].self, from: storedData)) ?? []
         self.init(tools: ids.compactMap(ExcalidrawTool.init(toolbarOrderID:)))
     }
 
     var storedData: Data {
-        (try? JSONEncoder().encode(tools.map(\.toolbarOrderID))) ?? Data()
+        let stored = StoredOrder(tools: tools.map(\.toolbarOrderID), directToolCount: directToolCount)
+        return (try? JSONEncoder().encode(stored)) ?? Data()
+    }
+
+    mutating func addDirectTool(_ tool: ExcalidrawTool) {
+        guard let index = tools.firstIndex(of: tool), index >= directToolCount else { return }
+        tools.remove(at: index)
+        tools.insert(tool, at: directToolCount)
+        directToolCount += 1
     }
 
     func pickerItems(
@@ -117,5 +131,21 @@ struct ExcalidrawToolbarToolOrder: Equatable, Hashable {
         }
 
         return normalized
+    }
+
+    private struct StoredOrder: Codable {
+        let tools: [String]
+        let directToolCount: Int
+
+        init(tools: [String], directToolCount: Int) {
+            self.tools = tools
+            self.directToolCount = directToolCount
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            tools = try container.decode([String].self, forKey: .tools)
+            directToolCount = (try? container.decode(Int.self, forKey: .directToolCount)) ?? 9
+        }
     }
 }
