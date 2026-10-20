@@ -53,13 +53,17 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         }
         let canvas = app.webViews.firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        let initial = control.buttons.element(boundBy: 1)
+        initial.tap()
+        assertSelection(initial, control: control)
         canvas.tap()
-        control.buttons.element(boundBy: 1).tap()
-        app.typeKey("1", modifierFlags: [])
+        assertSelection(initial, control: control)
+        captureEditorPhase(app, name: "Canvas contacted after initial tool selection, before public keyboard input")
+        canvas.typeKey("1", modifierFlags: [])
         assertSelection(plain, control: control)
         captureEditorPhase(app, name: "Plain 1 selects observed configured hint \(plainTitle)")
 
-        app.typeKey("1", modifierFlags: .option)
+        canvas.typeKey("1", modifierFlags: .option)
         if alternateDirect.exists {
             assertSelection(alternateDirect, control: control)
         } else {
@@ -71,7 +75,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             XCTAssertFalse(control.buttons.allElementsBoundByIndex.contains(where: \.isSelected))
         }
         captureEditorPhase(app, name: "Option 1 selects observed configured hint \(alternateTitle)")
-        app.typeKey("1", modifierFlags: [])
+        canvas.typeKey("1", modifierFlags: [])
         assertSelection(plain, control: control)
         XCTAssertEqual(extraTools.value as? String, "")
     }
