@@ -129,7 +129,15 @@ final class PageModeUITests: XCTestCase {
         // before supplying a drag route. This test does not claim a resize passed.
     }
 
-    func testSyntheticPageNativeResizeAndUndo() throws {
+    func testSyntheticGridPageNativeResizeAndUndo() throws {
+        try exerciseNativeResizeAndUndo(layout: "Grid")
+    }
+
+    func testSyntheticRuledPageNativeResizeAndUndo() throws {
+        try exerciseNativeResizeAndUndo(layout: "Ruled")
+    }
+
+    private func openSyntheticResizePage() throws -> XCUIApplication {
         let app = try openSyntheticDrawing()
         try selectTool("Selection", in: app)
         try openPages(in: app)
@@ -139,54 +147,64 @@ final class PageModeUITests: XCTestCase {
         try selectPage("Page 1", in: app)
         try setLayout("Grid", in: app)
         try requireObservedResizeAnchor(in: app, overview: false)
+        return app
+    }
 
+    private func exerciseNativeResizeAndUndo(layout: String) throws {
+        let app = try openSyntheticResizePage()
         try selectTool("Diamond", in: app)
         try drag(from: CGPoint(x: 700, y: 400), to: CGPoint(x: 800, y: 500), in: app)
         try selectTool("Selection", in: app)
         try selectPage("Page 1", in: app)
 
-        for layout in ["Grid", "Ruled"] {
-            try setLayout(layout, in: app)
-            try requireObservedResizeAnchor(in: app, overview: false)
-            let header = pageHeader("Page 1", in: app).frame
-            let right = app.buttons["pages.context.add"].firstMatch.frame.maxX
-            capture(app, step: "\(layout) before proportional corner resize, retain the Diamond")
+        try setLayout(layout, in: app)
+        try requireObservedResizeAnchor(in: app, overview: false)
+        let header = pageHeader("Page 1", in: app).frame
+        let right = app.buttons["pages.context.add"].firstMatch.frame.maxX
+        capture(app, step: "\(layout) before proportional corner resize, retain the Diamond")
 
-            // Observed normal selected-frame NE handle, pages-resize4ca-grid40.png.
-            try drag(from: CGPoint(x: 1148, y: 106), to: CGPoint(x: 1078, y: 206), in: app)
-            try waitForResize(in: app, step: "\(layout) proportional corner moved") {
-                self.pageHeader("Page 1", in: app).frame.minY > header.minY + 50 &&
-                    app.buttons["pages.context.add"].firstMatch.frame.maxX < right - 40
-            }
-            let heightChange = pageHeader("Page 1", in: app).frame.minY - header.minY
-            let widthChange = right - app.buttons["pages.context.add"].firstMatch.frame.maxX
-            XCTAssertEqual(widthChange / heightChange, 595.0 / 842.0, accuracy: 0.04)
-            capture(app, step: "\(layout) proportional resize, inspect full paper and unchanged Diamond")
-            try undoResize(in: app)
-            try requireObservedResizeAnchor(in: app, overview: false)
-
-            // The right-side handle is visible at the page's mid-height in that capture.
-            try drag(from: CGPoint(x: 1148, y: 555), to: CGPoint(x: 1048, y: 555), in: app)
-            try waitForResize(in: app, step: "\(layout) free right edge moved") {
-                abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 100)) < 4
-            }
-            XCTAssertEqual(pageHeader("Page 1", in: app).frame.minY, header.minY, accuracy: 3)
-            capture(app, step: "\(layout) free width resize, inspect full paper and unchanged height and ink")
-            try drag(from: CGPoint(x: 1048, y: 555), to: CGPoint(x: 1088, y: 555), in: app)
-            try waitForResize(in: app, step: "\(layout) repeated free resize moved") {
-                abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 60)) < 4
-            }
-            capture(app, step: "\(layout) repeated resize after pointer release, inspect paper and ink")
-            try undoResize(in: app)
-            try waitForResize(in: app, step: "\(layout) undo repeated edge resize") {
-                abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 100)) < 4
-            }
-            try undoResize(in: app)
-            try requireObservedResizeAnchor(in: app, overview: false)
-            try assertLayout(layout, in: app)
-            capture(app, step: "\(layout) undo restores original paper extent and Diamond")
+        // Observed normal selected-frame NE handle, pages-resize4ca-grid40.png.
+        try drag(from: CGPoint(x: 1148, y: 106), to: CGPoint(x: 1078, y: 206), in: app)
+        try waitForResize(in: app, step: "\(layout) proportional corner moved") {
+            self.pageHeader("Page 1", in: app).frame.minY > header.minY + 50 &&
+                app.buttons["pages.context.add"].firstMatch.frame.maxX < right - 40
         }
+        let heightChange = pageHeader("Page 1", in: app).frame.minY - header.minY
+        let widthChange = right - app.buttons["pages.context.add"].firstMatch.frame.maxX
+        XCTAssertEqual(widthChange / heightChange, 595.0 / 842.0, accuracy: 0.04)
+        capture(app, step: "\(layout) proportional resize, inspect full paper and unchanged Diamond")
+        try undoResize(in: app)
+        try requireObservedResizeAnchor(in: app, overview: false)
 
+        // The right-side handle is visible at the page's mid-height in that capture.
+        try drag(from: CGPoint(x: 1148, y: 555), to: CGPoint(x: 1048, y: 555), in: app)
+        try waitForResize(in: app, step: "\(layout) free right edge moved") {
+            abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 100)) < 4
+        }
+        XCTAssertEqual(pageHeader("Page 1", in: app).frame.minY, header.minY, accuracy: 3)
+        capture(app, step: "\(layout) free width resize, inspect full paper and unchanged height and ink")
+        try drag(from: CGPoint(x: 1048, y: 555), to: CGPoint(x: 1088, y: 555), in: app)
+        try waitForResize(in: app, step: "\(layout) repeated free resize moved") {
+            abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 60)) < 4
+        }
+        capture(app, step: "\(layout) repeated resize after pointer release, inspect paper and ink")
+        try undoResize(in: app)
+        try waitForResize(in: app, step: "\(layout) undo repeated edge resize") {
+            abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 100)) < 4
+        }
+        try undoResize(in: app)
+        try requireObservedResizeAnchor(in: app, overview: false)
+        try assertLayout(layout, in: app)
+        capture(app, step: "\(layout) undo restores original paper extent and Diamond")
+    }
+
+    func testSyntheticPageOverviewResizeAndUndo() throws {
+        let app = try openSyntheticResizePage()
+        try selectTool("Diamond", in: app)
+        try drag(from: CGPoint(x: 700, y: 400), to: CGPoint(x: 800, y: 500), in: app)
+        try selectTool("Selection", in: app)
+        try selectPage("Page 1", in: app)
+        try setLayout("Ruled", in: app)
         try addPage("Add right", in: app)
         try openPages(in: app)
         let overview = app.buttons["Canvas"].firstMatch
