@@ -197,6 +197,17 @@ private struct ControllerTestCanvas: View {
 
 @MainActor
 private final class CanvasControllerFixture {
+    private struct SetupFailure: Error, CustomStringConvertible {
+        let stage: String
+        let underlying: Error
+
+        var description: String {
+            "Canvas controller fixture setup failed during \(stage): \(String(reflecting: type(of: underlying))): \(underlying)"
+        }
+    }
+
+    // Keep a vetoed fixture and its live owner available until the test process exits.
+    private static var retainedFixtures: [CanvasControllerFixture] = []
     let state = FileState()
     let model = CanvasControllerModel()
     let toolState = ToolState()
@@ -219,11 +230,14 @@ private final class CanvasControllerFixture {
 
     static func open() async throws -> CanvasControllerFixture {
         let fixture = try CanvasControllerFixture()
+        var stage = "prepare open-in-place access"
         do {
             // Match the actual open-from-URL entry point, including its UIDocument writer.
             try await fixture.state.prepareOpenInPlaceAccess(to: fixture.url)
+            stage = "accept the synthetic document as active"
             let accepted = await fixture.state.requestActiveFileChange(.temporaryFile(fixture.url))
             guard accepted else { throw SaveTestWaitError.timedOut }
+            stage = "capture the real document writer"
             let target = try XCTUnwrap(fixture.state.capturedCanvasSaveTarget(for: .temporaryFile(fixture.url)))
             XCTAssertTrue(target.isOpenInPlace)
             _ = try XCTUnwrap(target.externalWriter)
@@ -234,27 +248,37 @@ private final class CanvasControllerFixture {
                 .environmentObject(AppPreference())
             fixture.window.rootViewController = UIHostingController(rootView: view)
             fixture.window.isHidden = false
+            stage = "attach the canvas core and parent"
             try await fixture.waitUntil { fixture.toolState.excalidrawWebCoordinator?.parent != nil }
             fixture.core = try XCTUnwrap(fixture.toolState.excalidrawWebCoordinator)
+            stage = "drain the queued initial refresh"
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.main.async { continuation.resume() }
+            }
             // Keep actual Core/parent/controller wiring; provide a deterministic, nonpersistent web page.
-            fixture.core.webView.stopLoading()
             fixture.core.webView.navigationDelegate = nil
+            fixture.core.webView.stopLoading()
+            stage = "load the inline web fixture"
             fixture.core.webView.loadHTMLString(Self.html, baseURL: nil)
             try await fixture.waitForJavaScript("window.fixtureReady === true")
             fixture.core.hasInjectIndexedDBData = true
             fixture.core.isNavigating = false
             fixture.core.isDocumentLoaded = true
+            stage = "decode the synthetic document"
             fixture.model.file = try ExcalidrawFile(data: fixture.original, id: fixture.url.absoluteString)
+            stage = "confirm the loaded canvas session and temporary row"
             try await fixture.waitUntil {
                 fixture.core.documentSyncController.captureCanvasMutationSession() != nil
                     && fixture.state.temporaryFiles.contains(fixture.url)
             }
+            stage = "record the external read baseline"
             let session = try await fixture.state.recordExternalFileRead(fixture.original, at: fixture.url)
             fixture.state.installExternalSaveSession(session)
             return fixture
         } catch {
+            let failure = SetupFailure(stage: stage, underlying: error)
             await fixture.close()
-            throw error
+            throw failure
         }
     }
 
@@ -271,10 +295,31 @@ private final class CanvasControllerFixture {
             try? await evaluate("window.releaseLoad?.(); window.releaseImage?.();")
         }
         for cleanup in taskCleanup { await cleanup() }
-        // Complete any deferred helper snapshot before releasing the real document session.
-        if let core {
-            let flush = Task { await core.documentSyncController.flushPendingDirtySnapshot(reason: "testCleanup", force: true) }
-            _ = try? await boundedSaveTestValue(flush, timeout: .seconds(8))
+        let session = state.externalSaveSessionID
+        var stage = "flush the original canvas owner"
+        do {
+            if let core {
+                let flush = Task { await core.documentSyncController.flushPendingDirtySnapshot(reason: "testCleanup", force: true) }
+                try await boundedSaveTestValue(flush, timeout: .seconds(8))
+            }
+            stage = "accept navigation close with the core and writer attached"
+            let close = Task { await state.requestActiveFileChange(nil) }
+            let accepted = try await boundedSaveTestValue(close, timeout: .seconds(8))
+            guard accepted else {
+                Self.retainedFixtures.append(self)
+                XCTFail("Synthetic navigation close was vetoed; live owner and data retained at \(directory.path)")
+                return
+            }
+            let pending = await ExternalFileSaveCoordinator.shared.pendingContent(at: url, session: session)
+            guard pending == nil, core?.documentSyncController.hasPendingDirtySnapshot != true else {
+                Self.retainedFixtures.append(self)
+                XCTFail("Synthetic save remains pending after close; owner and data retained at \(directory.path)")
+                return
+            }
+        } catch {
+            Self.retainedFixtures.append(self)
+            XCTFail("Synthetic cleanup failed during \(stage): \(error); owner and data retained at \(directory.path)")
+            return
         }
         core?.documentSyncController.resetFileLoadState()
         core?.webView.stopLoading()
@@ -287,7 +332,6 @@ private final class CanvasControllerFixture {
         preferences.coordinator = nil
         window.isHidden = true
         window.rootViewController = nil
-        let session = state.externalSaveSessionID
         await ExternalFileSaveCoordinator.shared.releaseSession(session)
         state.temporaryFiles.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
         do {
