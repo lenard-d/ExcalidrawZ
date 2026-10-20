@@ -74,9 +74,12 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                         shortcutLabel: item.shortcutLabel
                     ).environment(\.colorScheme, .light))
                     renderer.scale = scale
+                    let title = item.menuTitle(localizedName: item.tool.localization)
+                    let image = renderer.uiImage?.withRenderingMode(.alwaysTemplate)
+                    image?.accessibilityLabel = title
                     let action = UIAction(
-                        title: item.menuTitle(localizedName: item.tool.localization),
-                        image: renderer.uiImage?.withRenderingMode(.alwaysTemplate)
+                        title: title,
+                        image: image
                     ) { _ in }
                     control.insertSegment(action: action, at: index, animated: false)
                     control.setWidth(size * 2, forSegmentAt: index)

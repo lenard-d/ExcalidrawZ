@@ -21,6 +21,10 @@ final class ToolbarUIKitPickerTests: XCTestCase {
             XCTAssertEqual(control.numberOfSegments, items.count)
             for (index, item) in items.enumerated() {
                 XCTAssertNotNil(control.imageForSegment(at: index))
+                XCTAssertEqual(
+                    control.imageForSegment(at: index)?.accessibilityLabel,
+                    item.menuTitle(localizedName: item.tool.localization)
+                )
                 control.selectedSegmentIndex = index
                 control.sendActions(for: .valueChanged)
                 XCTAssertEqual(selected, item.tool)
@@ -67,6 +71,8 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         let reordered = ExcalidrawToolbarToolPresentation(order: .init(tools: [.laser, .ellipse])).items
         coordinator.update(control, items: reordered, selection: newBinding, size: 20, withFooter: true, scale: 1)
         XCTAssertEqual(control.selectedSegmentIndex, 1)
+        XCTAssertEqual(control.imageForSegment(at: 0)?.accessibilityLabel, "\(ExcalidrawTool.laser.localization) (1)")
+        XCTAssertEqual(control.imageForSegment(at: 1)?.accessibilityLabel, "\(ExcalidrawTool.ellipse.localization) (2)")
         control.selectedSegmentIndex = 0
         control.sendActions(for: .valueChanged)
         XCTAssertEqual(newSelection, .laser)
