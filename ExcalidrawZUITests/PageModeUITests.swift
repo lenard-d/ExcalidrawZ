@@ -43,6 +43,15 @@ final class PageModeUITests: XCTestCase {
 
     func testExploreSyntheticPageDuplicateAndReopenRoute() throws {
         let app = try openSyntheticDrawing()
+        try selectTool("Rectangle", in: app)
+        let rectangle = app.segmentedControls["toolbar.toolPicker"].buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rectangle")).firstMatch
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: rectangle)
+        guard XCTWaiter.wait(for: [selected], timeout: 10) == .completed else {
+            capture(app, step: "STOP: new canvas did not confirm the public tool change")
+            throw NSError(domain: "PageModeUITests", code: 5)
+        }
+        try selectTool("Selection", in: app)
+        capture(app, step: "New canvas after confirmed public tool change")
         try openPages(in: app)
         let add = app.buttons["pages.add"].firstMatch
         try requireHittable(add, in: app, step: "Create the synthetic page to duplicate")
