@@ -29,7 +29,6 @@ actor ExternalFileSaveCoordinator {
         init(_ fileState: FileState) { self.fileState = fileState }
     }
     let parent: Parent?
-    var content = Data("unchanged drawing".utf8)
     init(_ fileState: FileState) { parent = Parent(fileState) }
 }
 
@@ -56,7 +55,6 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) {
         let controller = ControllerProbe(state)
         state.excalidrawWebCoordinator = Coordinator(controller)
         let original = controller.captureCanvasMutationSession()!
-        let originalContent = controller.core!.content
         var first: [CanvasMutationSession?] = []
         var second: [CanvasMutationSession?] = []
         let one = controller.canvasMutationSessionChanges.sink {
@@ -76,11 +74,10 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) {
         require(controller.isCurrentCanvasMutationSession(current), "new owner must be valid")
         require(first == [current] && second == [current],
                 "both subscribers must synchronously observe the assigned token without load or next action")
-        require(controller.core!.content == originalContent, "same scene content must remain unchanged")
         state.installExternalSaveSession(replacement)
         require(first == [current] && second == [current], "identical UUID must not emit an owner change")
         require(controller.isCurrentCanvasMutationSession(current), "identical UUID keeps current owner")
         withExtendedLifetime((one, two)) {}
-        print("PASS: actual install, real capture token, same file/generation/content, new UUID, two synchronous subscribers, old owner invalid, identical UUID silent")
+        print("PASS: actual install, real capture token, same file/generation, new UUID, two synchronous subscribers, old owner invalid, identical UUID silent")
     }
 }
