@@ -87,6 +87,58 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         // Post-release assertions do not establish the selection shown during either held contact.
     }
 
+    func testQuickContactCrossesToolsThenLeavesRow() throws {
+        let app = openSyntheticDrawing()
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let cursor = tool(named: "Selection", in: control)
+        let diamond = tool(named: "Diamond", in: control)
+        XCTAssertTrue(cursor.isHittable)
+        XCTAssertTrue(diamond.isHittable)
+        let buttons = control.buttons.allElementsBoundByIndex
+        let targetIndex = try XCTUnwrap(buttons.firstIndex { $0.label == diamond.label })
+        XCTAssertGreaterThan(targetIndex, 0)
+        XCTAssertLessThan(targetIndex + 1, buttons.count)
+        let canvas = app.webViews.firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+
+        for (phase, originIndex) in [targetIndex - 1, targetIndex + 1].enumerated() {
+            cursor.tap()
+            assertSelection(cursor, control: control)
+            let origin = buttons[originIndex]
+            XCTAssertTrue(origin.isHittable)
+            let start = origin.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            // Cross Diamond near the bottom of its live frame, then leave in the same contact.
+            let targetY = control.frame.maxY - 2
+            let outsideY = control.frame.maxY + 12
+            let ratio = (outsideY - origin.frame.midY) / (targetY - origin.frame.midY)
+            let outsideX = origin.frame.midX + (diamond.frame.midX - origin.frame.midX) * ratio
+            let exitRatio = (control.frame.maxY - origin.frame.midY) / (outsideY - origin.frame.midY)
+            let exitX = origin.frame.midX + (outsideX - origin.frame.midX) * exitRatio
+            XCTAssertGreaterThan(exitX, diamond.frame.minX + 2)
+            XCTAssertLessThan(exitX, diamond.frame.maxX - 2)
+            XCTAssertTrue(app.windows.firstMatch.frame.contains(CGPoint(x: outsideX, y: outsideY)))
+            let outside = control.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: outsideX - control.frame.minX, dy: outsideY - control.frame.minY
+            ))
+            capture(app, name: "Cross-exit phase \(phase): before quick contact on \(origin.label)")
+            start.press(forDuration: 0.05, thenDragTo: outside, withVelocity: .slow, thenHoldForDuration: 3)
+            let selectedLabels = control.buttons.allElementsBoundByIndex.filter(\.isSelected).map(\.label)
+            let state = XCTAttachment(string: "Phase \(phase), native selected segments after release: \(selectedLabels)")
+            state.lifetime = .keepAlways
+            add(state)
+            capture(app, name: "Cross-exit phase \(phase): released outside, inspect native indicator")
+            // Capture the actual canvas result even if native segment state is wrong.
+            let x = phase == 0 ? 0.25 : 0.55
+            drag(in: canvas, from: CGVector(dx: x, dy: 0.35), to: CGVector(dx: x + 0.15, dy: 0.55))
+            capture(app, name: "Cross-exit phase \(phase): canvas must contain a Diamond")
+            XCTAssertEqual(selectedLabels, [diamond.label])
+        }
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        // Root must inspect held video and canvas images separately from native segment state.
+    }
+
     func testOutsideReleaseKeepsLastContactedToolOnCanvas() {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
