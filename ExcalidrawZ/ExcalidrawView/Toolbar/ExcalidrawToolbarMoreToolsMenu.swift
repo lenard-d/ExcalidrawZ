@@ -15,6 +15,7 @@ struct ExcalidrawToolbarMoreToolsMenu<AdditionalActions: View>: View {
     var overflowItems: [ExcalidrawToolbarToolPresentation.Item] = []
     var usesPrincipalLabel = false
     var usesStableLabel = false
+    var accessibilityIdentifier = "toolbar.moreTools"
     @ViewBuilder var additionalActions: () -> AdditionalActions
 
     @State private var isMathInputSheetPresented = false
@@ -93,7 +94,7 @@ struct ExcalidrawToolbarMoreToolsMenu<AdditionalActions: View>: View {
                 menuLabel
             }
         }
-        .accessibilityIdentifier("toolbar.moreTools")
+        .accessibilityIdentifier(accessibilityIdentifier)
         .accessibilityValue(activeOverflowItem.map { $0.menuTitle(localizedName: $0.tool.localization) } ?? "")
         .menuIndicator(.hidden)
 #if os(iOS)
@@ -135,11 +136,13 @@ extension ExcalidrawToolbarMoreToolsMenu where AdditionalActions == EmptyView {
     init(
         overflowItems: [ExcalidrawToolbarToolPresentation.Item] = [],
         usesPrincipalLabel: Bool = false,
-        usesStableLabel: Bool = false
+        usesStableLabel: Bool = false,
+        accessibilityIdentifier: String = "toolbar.moreTools"
     ) {
         self.overflowItems = overflowItems
         self.usesPrincipalLabel = usesPrincipalLabel
         self.usesStableLabel = usesStableLabel
+        self.accessibilityIdentifier = accessibilityIdentifier
         self.additionalActions = { EmptyView() }
     }
 }

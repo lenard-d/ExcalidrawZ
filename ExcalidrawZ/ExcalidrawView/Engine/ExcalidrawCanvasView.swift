@@ -206,6 +206,11 @@ struct ExcalidrawCanvasView: View {
             .watch(value: usesNativeIPadControls, initial: true) { _, _ in
                 applyNativeIPadControls()
             }
+            .watch(value: toolState.activatedTool) { tool in
+                if tool == .freedraw && usesNativeIPadControls {
+                    applyNativeIPadControls()
+                }
+            }
 #endif
             .watch(value: colorScheme) { newValue in
                 applyColorMode(colorScheme: newValue)
@@ -252,7 +257,13 @@ struct ExcalidrawCanvasView: View {
                     contentWorld: .page
                 )
                 if enabled {
-                    try await excalidrawCore.toggleActionsMenu(isPresented: toolState.isActionsMenuPresneted)
+                    let isPenSelected = toolState.activatedTool == .freedraw
+                    try await excalidrawCore.toggleActionsMenu(
+                        isPresented: isPenSelected || toolState.isActionsMenuPresneted
+                    )
+                    if isPenSelected {
+                        toolState.isActionsMenuPresneted = true
+                    }
                 }
             } catch {
                 onError(error)

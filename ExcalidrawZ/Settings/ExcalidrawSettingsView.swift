@@ -66,7 +66,7 @@ struct ExcalidrawSettingsView: View {
     private func toolbarOrderSection() -> some View {
         Section {
 #if os(iOS)
-            ForEach(editingToolbarToolOrder.tools, id: \.self) { tool in
+            ForEach(Array(editingToolbarToolOrder.tools.prefix(editingToolbarToolOrder.directToolCount)), id: \.self) { tool in
                 ToolbarToolOrderRow(
                     tool: tool,
                     shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool),
@@ -74,6 +74,21 @@ struct ExcalidrawSettingsView: View {
                 )
             }
             .onMove(perform: moveToolbarTools)
+            if !extraToolbarTools.isEmpty {
+                Menu {
+                    ForEach(extraToolbarTools, id: \.self) { tool in
+                        Button {
+                            addDirectTool(tool)
+                        } label: {
+                            Label(tool.localization, systemSymbol: tool.menuSystemSymbol)
+                        }
+                        .accessibilityIdentifier("settings.toolbar.add.\(tool.toolbarOrderID)")
+                    }
+                } label: {
+                    Label("Add tool", systemImage: "plus")
+                }
+                .accessibilityIdentifier("settings.toolbar.addTool")
+            }
 #else
             ForEach(editingToolbarToolOrder.tools, id: \.self) { tool in
                 ToolbarToolOrderRow(
@@ -126,13 +141,51 @@ struct ExcalidrawSettingsView: View {
                 } label: {
                     Label(.localizable(.generalButtonReset), systemSymbol: .arrowCounterclockwise)
                 }
+                .accessibilityIdentifier("settings.toolbar.reset")
             }
         } footer: {
             Text(localizable: .settingsExcalidrawToolbarOrderFooter)
         }
+#if os(iOS)
+        if !extraToolbarTools.isEmpty {
+            Section {
+                ForEach(extraToolbarTools, id: \.self) { tool in
+                    ToolbarToolOrderRow(
+                        tool: tool,
+                        shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool),
+                        showsDragHandle: false
+                    )
+                }
+                .onMove { offsets, destination in
+                    let start = editingToolbarToolOrder.directToolCount
+                    moveToolbarTools(
+                        from: IndexSet(offsets.map { $0 + start }),
+                        to: destination + start
+                    )
+                }
+            } header: {
+                Text("Extra tools")
+            } footer: {
+                Text("These tools stay in the extra-tools menu. Use Add tool to put one in the toolbar.")
+            }
+        }
+#endif
     }
 
 #if os(iOS)
+    private var extraToolbarTools: [ExcalidrawTool] {
+        Array(editingToolbarToolOrder.tools.dropFirst(editingToolbarToolOrder.directToolCount))
+    }
+
+    private func addDirectTool(_ tool: ExcalidrawTool) {
+        var updatedOrder = editingToolbarToolOrder
+        updatedOrder.addDirectTool(tool)
+        withAnimation(.smooth) {
+            editingToolbarToolOrder = updatedOrder
+        }
+        applyToolbarToolOrderNow(updatedOrder)
+    }
+
     private func moveToolbarTools(from offsets: IndexSet, to destination: Int) {
         var updatedOrder = editingToolbarToolOrder
         updatedOrder.move(from: offsets, to: destination)
