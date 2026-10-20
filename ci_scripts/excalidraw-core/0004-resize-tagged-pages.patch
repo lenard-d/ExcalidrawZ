@@ -29,7 +29,7 @@ index 5e0e56b..1504178 100644
        informMutation: shouldInformMutation,
        isDragging: false,
 diff --git a/packages/element/src/transformHandles.ts b/packages/element/src/transformHandles.ts
-index 7ef5684..2165d20 100644
+index 7ef5684..09da400 100644
 --- a/packages/element/src/transformHandles.ts
 +++ b/packages/element/src/transformHandles.ts
 @@ -14,6 +14,7 @@ import type {
@@ -40,27 +40,30 @@ index 7ef5684..2165d20 100644
  import {
    isElbowArrow,
    isFrameLikeElement,
-@@ -306,6 +307,7 @@ export const getTransformHandles = (
+@@ -306,6 +307,9 @@ export const getTransformHandles = (
    } else if (isFrameLikeElement(element)) {
      omitSides = {
        ...omitSides,
-+      ...(isTaggedPage(element) ? { n: false, s: false, e: false, w: false } : {}),
++      ...(isTaggedPage(element)
++        ? { n: false, s: false, e: false, w: false }
++        : {}),
        rotation: true,
      };
    }
 diff --git a/packages/element/src/frame.ts b/packages/element/src/frame.ts
-index d74c99e..e0dad15 100644
+index d74c99e..99fa7ae 100644
 --- a/packages/element/src/frame.ts
 +++ b/packages/element/src/frame.ts
-@@ -39,6 +39,7 @@ import {
+@@ -38,6 +38,8 @@ import {
+   isTextElement,
  } from "./typeChecks";
  
- import { getNonDeletedElements } from ".";
 +import { isTaggedPageGuide } from "./taggedPage";
++
+ import { getNonDeletedElements } from ".";
  
  import type { ExcalidrawElementsIncludingDeleted } from "./Scene";
- 
-@@ -398,6 +399,12 @@ export const getElementsInResizingFrame = (
+@@ -398,6 +400,12 @@ export const getElementsInResizingFrame = (
      }
    }
  
@@ -201,18 +204,18 @@ index 0000000..f5fb6e1
 +  });
 +};
 diff --git a/packages/excalidraw/components/App.selectionTool.ts b/packages/excalidraw/components/App.selectionTool.ts
-index dbc67f3..fae7695 100644
+index dbc67f3..0c9bdfe 100644
 --- a/packages/excalidraw/components/App.selectionTool.ts
 +++ b/packages/excalidraw/components/App.selectionTool.ts
-@@ -68,6 +68,8 @@ import type {
-   PointerType,
- } from "@excalidraw/element/types";
+@@ -58,6 +58,8 @@ import {
+   vectorSubtract,
+ } from "@excalidraw/math";
  
 +import { isTaggedPage } from "@excalidraw/element/taggedPage";
 +
- import { actionToggleLinearEditor } from "../actions";
- import {
-   getElementsWithinSelection,
+ import type { TransformHandleType } from "@excalidraw/element";
+ import type {
+   ExcalidrawElement,
 @@ -681,6 +683,10 @@ export class AppSelectionTool {
      // edges stay free by default — Shift constrains them like any shape.
      const proportionalByDefault =
