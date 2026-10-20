@@ -62,9 +62,9 @@ final class PageModeUITests: XCTestCase {
         let rename = app.buttons["Rename"].firstMatch
         try requireHittable(rename, in: app, step: "Observed Rename action")
         rename.tap()
-        XCTAssertEqual(app.textFields.count, 1)
         let nameField = app.textFields.firstMatch
         try requireHittable(nameField, in: app, step: "Observed drawing name field")
+        XCTAssertEqual(app.textFields.count, 1)
         let oldName = try XCTUnwrap(nameField.value as? String)
         nameField.tap()
         nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: oldName.count) + drawingName)
