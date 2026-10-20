@@ -14,6 +14,7 @@ struct ExcalidrawToolbarMoreToolsMenu<AdditionalActions: View>: View {
 
     var overflowItems: [ExcalidrawToolbarToolPresentation.Item] = []
     var usesPrincipalLabel = false
+    var usesStableLabel = false
     @ViewBuilder var additionalActions: () -> AdditionalActions
 
     @State private var isMathInputSheetPresented = false
@@ -106,8 +107,15 @@ struct ExcalidrawToolbarMoreToolsMenu<AdditionalActions: View>: View {
 
     @ViewBuilder
     private var menuLabel: some View {
-        if usesPrincipalLabel {
+        if usesStableLabel {
             Label(.localizable(.toolbarMoreTools), systemImage: "ellipsis.circle")
+        } else if let item = activeOverflowItem {
+            Label {
+                Text(.localizable(.toolbarMoreTools))
+            } icon: {
+                item.tool.icon().frame(width: 20, height: 20)
+            }
+            .foregroundStyle(Color.accentColor)
         } else if #available(macOS 15.0, iOS 18.0, *) {
             Label(.localizable(.toolbarMoreTools), systemImage: "xmark.triangle.circle.square")
         } else if #available(macOS 13.0, iOS 16.0, *) {
@@ -126,10 +134,12 @@ struct ExcalidrawToolbarMoreToolsMenu<AdditionalActions: View>: View {
 extension ExcalidrawToolbarMoreToolsMenu where AdditionalActions == EmptyView {
     init(
         overflowItems: [ExcalidrawToolbarToolPresentation.Item] = [],
-        usesPrincipalLabel: Bool = false
+        usesPrincipalLabel: Bool = false,
+        usesStableLabel: Bool = false
     ) {
         self.overflowItems = overflowItems
         self.usesPrincipalLabel = usesPrincipalLabel
+        self.usesStableLabel = usesStableLabel
         self.additionalActions = { EmptyView() }
     }
 }
