@@ -55,6 +55,23 @@ final class PageModeUITests: XCTestCase {
 
     func testExploreSyntheticPageDuplicateAndReopenRoute() throws {
         let app = try openSyntheticDrawing()
+        let drawingName = "Pages-Duplicate-" + UUID().uuidString.prefix(8)
+        let titleMenu = app.navigationBars.buttons["More"].firstMatch
+        try requireHittable(titleMenu, in: app, step: "Rename only the new synthetic drawing")
+        titleMenu.tap()
+        let rename = app.buttons["Rename"].firstMatch
+        try requireHittable(rename, in: app, step: "Observed Rename action")
+        rename.tap()
+        XCTAssertEqual(app.textFields.count, 1)
+        let nameField = app.textFields.firstMatch
+        try requireHittable(nameField, in: app, step: "Observed drawing name field")
+        let oldName = try XCTUnwrap(nameField.value as? String)
+        nameField.tap()
+        nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: oldName.count) + drawingName)
+        let confirmRename = app.buttons["OK"].firstMatch
+        try requireHittable(confirmRename, in: app, step: "Observed Rename confirmation")
+        confirmRename.tap()
+        capture(app, step: "Unique synthetic drawing: " + drawingName)
         try selectTool("Rectangle", in: app)
         let rectangle = app.segmentedControls["toolbar.toolPicker"].buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rectangle")).firstMatch
         let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: rectangle)
@@ -94,8 +111,35 @@ final class PageModeUITests: XCTestCase {
         try assertLayout("Grid", in: app)
         capture(app, step: "Duplicated grid page, inspect retained ink")
 
-        // Stop here. Root must identify this drawing's actual row before a reopen or PDF save.
-        capture(app, step: "STOP for route inspection: synthetic drawing filename and reopen controls")
+        let showSidebar = app.buttons["Show Sidebar"].firstMatch
+        if showSidebar.exists && showSidebar.isHittable { showSidebar.tap() }
+        let sidebar = app.collectionViews["Sidebar"].firstMatch
+        let home = sidebar.buttons["Home"].firstMatch
+        try requireHittable(home, in: app, step: "Leave the exact synthetic drawing through Home")
+        home.tap()
+        capture(app, step: "Synthetic drawing left through Home before process restart")
+        app.terminate()
+        app.launch()
+        let reopenSidebar = app.buttons["Show Sidebar"].firstMatch
+        if reopenSidebar.exists && reopenSidebar.isHittable { reopenSidebar.tap() }
+        let savedDrawing = app.collectionViews["Sidebar"].staticTexts[drawingName].firstMatch
+        try requireHittable(savedDrawing, in: app, step: "Reopen the exact unique synthetic drawing after process restart")
+        savedDrawing.tap()
+        try selectTool("Selection", in: app)
+        try openPages(in: app)
+        let reopenedCopy = app.buttons["pages.open.1"].firstMatch
+        try requireHittable(reopenedCopy, in: app, step: "Two persisted pages after actual reopen")
+        XCTAssertTrue(app.buttons["pages.open.0"].exists)
+        XCTAssertFalse(app.buttons["pages.open.2"].exists)
+        capture(app, step: "Reopened drawing has exactly two recognized pages")
+        reopenedCopy.tap()
+        try assertLayout("Grid", in: app)
+        capture(app, step: "Reopened duplicated Grid page, inspect retained ink")
+        try openPages(in: app)
+        let exportPDF = app.buttons["Export pages as PDF"].firstMatch
+        try requireHittable(exportPDF, in: app, step: "Normal Pages PDF export action")
+        exportPDF.tap()
+        capture(app, step: "STOP: actual Pages PDF exporter before choosing a destination")
     }
 
     func testSyntheticPageContextLayoutsAndBothAddDirections() throws {
