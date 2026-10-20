@@ -104,9 +104,17 @@ final class WelcomeInterfaceTests: XCTestCase {
         largeText: Bool = false
     ) -> XCUIApplication {
         let app = openDrawing(orientation: orientation, largeText: largeText)
-        let chat = app.buttons["AI Chat"].firstMatch
-        XCTAssertTrue(chat.waitForExistence(timeout: 15))
-        chat.tap()
+        let welcome = app.scrollViews["aiChatWelcomeScrollView"]
+        if !welcome.waitForExistence(timeout: 2) {
+            let chat = app.buttons["AI Chat"].firstMatch
+            let ready = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "isHittable == true"),
+                object: chat
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+            chat.tap()
+        }
+        XCTAssertTrue(welcome.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["aiChatWelcomePrimaryAction"].waitForExistence(timeout: 5))
         return app
     }
