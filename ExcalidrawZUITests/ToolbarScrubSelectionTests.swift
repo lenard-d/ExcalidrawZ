@@ -265,7 +265,8 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             return
         }
         share.tap()
-        captureEditorPhase(app, name: "STOP after Share tap, inspect presentation before choosing a route")
+        assertShareMenuDismisses(in: app)
+        assertStyleRespondsAndRestores(in: app)
     }
 
     func testExploreFileProtectionPresentation() {
@@ -304,7 +305,8 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
         XCTAssertTrue(app.segmentedControls["toolbar.toolPicker"].isHittable)
         XCTAssertTrue(menu.isHittable)
-        captureEditorPhase(app, name: "File protection cancelled, editor restored")
+        assertStyleRespondsAndRestores(in: app)
+        captureEditorPhase(app, name: "File protection cancelled, editor response restored")
     }
 
     func testShareMenuDismissesAndReturnsToEditor() {
@@ -314,6 +316,12 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(share.isHittable)
         captureEditorPhase(app, name: "Settled B1 toolbar before independent Share")
         share.tap()
+        assertShareMenuDismisses(in: app)
+        assertStyleRespondsAndRestores(in: app)
+        captureEditorPhase(app, name: "Share menu dismissed, Style responds and returns to its original state")
+    }
+
+    private func assertShareMenuDismisses(in app: XCUIApplication) {
         let image = app.buttons["Image"].firstMatch
         let file = app.buttons["File"].firstMatch
         let pdf = app.buttons["PDF"].firstMatch
@@ -331,7 +339,10 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             !image.exists && !file.exists && !pdf.exists
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
-        XCTAssertTrue(share.isHittable)
+        XCTAssertTrue(app.buttons["toolbar.share"].firstMatch.isHittable)
+    }
+
+    private func assertStyleRespondsAndRestores(in app: XCUIApplication) {
         let style = app.buttons["toolbar.style"].firstMatch
         XCTAssertTrue(style.isHittable)
         let originalStyle = style.isSelected
@@ -345,7 +356,6 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: originalStyle)), object: style
         )
         XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
-        captureEditorPhase(app, name: "Share menu dismissed, Style responds and returns to its original state")
     }
 
     func testUndoThenTapOpensRedoMenu() {

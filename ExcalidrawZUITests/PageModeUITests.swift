@@ -189,7 +189,7 @@ final class PageModeUITests: XCTestCase {
         try requireHittable(copiedHeader, in: app, step: "Observed copied Page 1 header after reopen")
         copiedHeader.tap()
         try assertLayout("Grid", in: app)
-        capture(app, step: "Persisted duplicated Grid page and ink after restart")
+        capture(app, step: "Persisted duplicated Grid page after restart, inspect ink separately")
         try openPages(in: app)
         let exportPDF = app.buttons["Export pages as PDF"].firstMatch
         let pagesList = app.collectionViews.containing(.button, identifier: "Export pages as PDF").firstMatch
@@ -198,6 +198,7 @@ final class PageModeUITests: XCTestCase {
         }
         try requireHittable(exportPDF, in: app, step: "Normal PDF export for reopened synthetic duplicate")
         exportPDF.tap()
+        // Inspect the app-generated PDF and retained ink outside this continuation.
         capture(app, step: "STOP: Pages PDF export requested, inspect destination separately")
     }
 
