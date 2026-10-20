@@ -6,7 +6,8 @@ Apply the tracked patches to a clean checkout before building the native app's
 ignored web resources. Patch 0001 makes Pen input mode independent of tool lock.
 Patch 0002 removes writing-target feedback only for tagged pages. Patch 0003
 removes web controls supplied by the full-width native iPad bar and preserves
-the Style panel state.
+the Style panel state. Patch 0004 adds native proportional corner resizing and
+free edge resizing for tagged pages, and reflows their paper guides.
 
 From that core checkout, with Node.js 22 and Yarn 1.22.22 available:
 
@@ -20,6 +21,8 @@ EXCALIDRAWZ_CORE_PATH="$PWD" node --experimental-vm-modules --test \
   "$NATIVE_CHECKOUT/ci_scripts/excalidraw-core/check-native-ipad-controls.mjs"
 EXCALIDRAWZ_CORE_PATH="$PWD" node \
   "$NATIVE_CHECKOUT/ci_scripts/excalidraw-core/check-page-highlight.mjs"
+EXCALIDRAWZ_CORE_PATH="$PWD" node \
+  "$NATIVE_CHECKOUT/ci_scripts/excalidraw-core/check-page-resize.mjs"
 yarn workspace excalidraw-app build:app:docker
 yarn workspace excalidraw-app build:version
 ```
