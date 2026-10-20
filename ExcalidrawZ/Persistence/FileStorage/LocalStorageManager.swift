@@ -102,7 +102,8 @@ actor LocalStorageManager {
         _ content: Data,
         fileID: String,
         type: FileStorageContentType,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        capture: CanvasSaveCapture? = nil
     ) throws -> SaveResult {
         let directory = try ensureDirectoryExists(for: directory(for: type))
 
@@ -137,6 +138,10 @@ actor LocalStorageManager {
             )
         }
         
+        // This actor does not suspend between admission and the write. A delayed
+        // older capture cannot replace a newer write that already completed here.
+        try capture?.withAdmission {}
+
         // Check if file exists and content is identical
         if FileManager.default.fileExists(at: fileURL) {
             do {

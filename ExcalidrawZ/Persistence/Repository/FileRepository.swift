@@ -229,7 +229,8 @@ actor FileRepository {
         fileObjectID: NSManagedObjectID,
         fileData: Data,
         checkpoint: CheckpointWriteOptions,
-        updateMetadataWhenPathUnchanged: Bool = true
+        updateMetadataWhenPathUnchanged: Bool = true,
+        capture: CanvasSaveCapture? = nil
     ) async throws {
         let context = PersistenceController.shared.newTaskContext()
 
@@ -245,12 +246,17 @@ actor FileRepository {
         try await saveFileContentToStorage(
             fileObjectID: fileObjectID,
             content: contentData,
-            updateMetadataWhenPathUnchanged: updateMetadataWhenPathUnchanged
+            updateMetadataWhenPathUnchanged: updateMetadataWhenPathUnchanged,
+            capture: capture
         )
 
 #if DEBUG && os(iOS) && targetEnvironment(simulator)
         try await runCanvasSaveTestControl(.afterStorage, fileObjectID: fileObjectID)
 #endif
+
+        // A newer capture may have arrived while storage or the test hold was awaited.
+        // Its pending intent must survive, and the old save must not update history.
+        try capture?.withAdmission {}
 
         // Step 2: Write checkpoint per policy.
         switch checkpoint {
@@ -352,7 +358,8 @@ actor FileRepository {
     func saveFileContentToStorage(
         fileObjectID: NSManagedObjectID,
         content: Data,
-        updateMetadataWhenPathUnchanged: Bool = true
+        updateMetadataWhenPathUnchanged: Bool = true,
+        capture: CanvasSaveCapture? = nil
     ) async throws {
         let context = PersistenceController.shared.newTaskContext()
 
@@ -378,7 +385,8 @@ actor FileRepository {
             contentToSave,
             fileID: fileID.uuidString,
             type: .file,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            capture: capture
         )
 
         // Step 3: Update after successful save
