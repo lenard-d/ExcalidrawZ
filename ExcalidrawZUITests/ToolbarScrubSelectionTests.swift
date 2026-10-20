@@ -289,6 +289,10 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let panel = app.webViews.otherElements.matching(
             NSPredicate(format: "label BEGINSWITH %@", "Selected shape actions,")
         ).firstMatch
+        let duplicate = app.webViews.buttons["Duplicate"].firstMatch
+        let delete = app.webViews.buttons["Delete"].firstMatch
+        XCTAssertFalse(duplicate.exists)
+        XCTAssertFalse(delete.exists)
         XCTAssertFalse(panel.isHittable)
         let style = app.buttons["toolbar.style"].firstMatch
         XCTAssertTrue(style.isHittable)
@@ -306,7 +310,9 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         assertSelection(cursor, control: control)
         // The rectangle is transparent. Select its straight left border.
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(panel.waitForExistence(timeout: 5), "A selected shape must mount its style region")
+        // Hidden Style uses visibility:hidden and need not appear in WebKit's accessibility tree.
+        XCTAssertTrue(duplicate.waitForExistence(timeout: 5), "Selection must expose its Duplicate action")
+        XCTAssertTrue(delete.exists, "Selection must expose its Delete action")
         XCTAssertFalse(panel.isHittable, "Selection must use stored Style state without another Style request")
         let unexpectedlyShown = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "isHittable == true"), object: panel
