@@ -51,6 +51,9 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
                 }
                 fileProtection()
             }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .fixedSize()
         }
         .labelStyle(.iconOnly)
     }
