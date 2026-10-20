@@ -41,6 +41,9 @@ struct PDFInsertSheetUITestFixture: View {
                 .accessibilityIdentifier("pdfFixture.callbackOptions")
             Spacer(minLength: 0)
         }
+        // Keep the fixed viewport inside the window's safe area. At its top edge,
+        // NavigationStack extends into the status bar and enlarges the viewport.
+        .padding(.top, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
