@@ -267,8 +267,16 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         redo.tap()
         let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: redo)
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed)
-        XCTAssertTrue(undo.isEnabled)
         captureEditorPhase(app, name: "After Redo, inspect rectangle restoration")
+        undo.press(forDuration: 1)
+        let undoAction = app.buttons["toolbar.undoAction"].firstMatch
+        XCTAssertTrue(undoAction.waitForExistence(timeout: 5))
+        let historyRestored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            undoAction.isEnabled && redo.exists && !redo.isEnabled
+        }, object: undoAction)
+        XCTAssertEqual(XCTWaiter.wait(for: [historyRestored], timeout: 5), .completed,
+                       "Redo must restore Undo availability and exhaust the redo history")
+        captureEditorPhase(app, name: "History state after Redo")
     }
 
     func testStyleHiddenWithoutSelectionStaysHiddenWhenSelectingANewShape() {
