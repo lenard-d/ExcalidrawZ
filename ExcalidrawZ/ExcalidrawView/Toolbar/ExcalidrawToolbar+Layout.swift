@@ -88,9 +88,11 @@ enum ExcalidrawToolbarLayoutPolicy {
     static func usesNativeIPadControls(
         isPad: Bool,
         horizontalSizeClass: UserInterfaceSizeClass?,
-        containerWidth: CGFloat
+        containerWidth: CGFloat,
+        isNormalEditor: Bool = true,
+        isInteractionEnabled: Bool = true
     ) -> Bool {
-        isPad && containerWidth > 0 && !usesCompactIOSBottomToolbar(
+        isPad && isNormalEditor && isInteractionEnabled && containerWidth > 0 && !usesCompactIOSBottomToolbar(
             horizontalSizeClass: horizontalSizeClass,
             containerWidth: containerWidth
         )

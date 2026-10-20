@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
@@ -39,7 +41,7 @@ function editor() {
       <button class="page-context">Page action</button>
     </div>
     <div class="dialog"><div class="zoom-actions">Dialog zoom</div></div>
-    </div></body></html>`);
+    </div></body></html>`, { url: "https://excalidraw.invalid" });
 }
 
 function display(page, selector) {
@@ -74,4 +76,62 @@ test("The flag is local to one editor document", () => {
   assert.equal(display(otherEditor, ".undo-redo-buttons"), "flex");
   nativeIPad.window.close();
   otherEditor.window.close();
+});
+
+// Load the complete production helper and its real local imports.
+async function styleHelper(page) {
+  const helper = { shouldHideActionsMenu: false };
+  const context = vm.createContext({
+    window: { excalidrawZHelper: helper },
+    document: page.window.document,
+    localStorage: page.window.localStorage,
+    KeyboardEvent: page.window.KeyboardEvent,
+    setTimeout,
+    console,
+  });
+  const modules = new Map();
+  function moduleAt(filename) {
+    if (!modules.has(filename)) {
+      modules.set(filename, new vm.SourceTextModule(readFileSync(filename, "utf8"), {
+        context, identifier: filename,
+      }));
+    }
+    return modules.get(filename);
+  }
+  const interaction = moduleAt(path.resolve(corePath, "excalidraw-app/excalidrawZ/interaction.js"));
+  await interaction.link((specifier, importing) => {
+    assert.ok(specifier.startsWith("./"), "Only helper-local imports are expected");
+    return moduleAt(path.resolve(path.dirname(importing.identifier), specifier + ".js"));
+  });
+  await interaction.evaluate();
+  return { helper, toggle: interaction.namespace.toggleActionsMenu };
+}
+
+test("Style records hidden state without a panel and applies it when the panel is later present", async () => {
+  const page = editor();
+  const panel = page.window.document.querySelector(".selected-shape-actions");
+  panel.remove();
+  const { helper, toggle } = await styleHelper(page);
+  toggle(false);
+  assert.equal(helper.shouldHideActionsMenu, true, "Later selection must receive the requested hidden state");
+  page.window.document.querySelector(".App-menu_top__left").append(panel);
+  toggle(false);
+  assert.ok(panel.classList.contains("transition-left"));
+  assert.equal(helper.shouldHideActionsMenu, true);
+  toggle(true);
+  assert.equal(panel.classList.contains("transition-left"), false);
+  assert.equal(helper.shouldHideActionsMenu, false);
+  page.window.close();
+});
+
+test("Repeated Style requests preserve the requested visibility", async () => {
+  const page = editor();
+  const panel = page.window.document.querySelector(".selected-shape-actions");
+  const { helper, toggle } = await styleHelper(page);
+  for (const presented of [false, false, true, true, false, false]) {
+    toggle(presented);
+    assert.equal(panel.classList.contains("transition-left"), !presented);
+    assert.equal(helper.shouldHideActionsMenu, !presented);
+  }
+  page.window.close();
 });

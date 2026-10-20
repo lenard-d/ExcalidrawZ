@@ -172,14 +172,18 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         menu.tap()
         let initialPenMode = menuToggleIsOn("toolbar.penMode", in: app)
         let initialToolLock = menuToggleIsOn("toolbar.toolLock", in: app)
+        defer {
+            setMenuToggle("toolbar.penMode", to: initialPenMode, menu: menu, in: app)
+            setMenuToggle("toolbar.toolLock", to: initialToolLock, menu: menu, in: app)
+        }
         app.descendants(matching: .any)["toolbar.toolLock"].firstMatch.tap()
         reopenMenuIfNeeded(menu, in: app)
+        waitForMenuToggle("toolbar.toolLock", toBe: !initialToolLock, in: app)
         XCTAssertEqual(menuToggleIsOn("toolbar.penMode", in: app), initialPenMode)
-        XCTAssertEqual(menuToggleIsOn("toolbar.toolLock", in: app), !initialToolLock)
 
         app.descendants(matching: .any)["toolbar.penMode"].firstMatch.tap()
         reopenMenuIfNeeded(menu, in: app)
-        XCTAssertEqual(menuToggleIsOn("toolbar.penMode", in: app), !initialPenMode)
+        waitForMenuToggle("toolbar.penMode", toBe: !initialPenMode, in: app)
         XCTAssertEqual(menuToggleIsOn("toolbar.toolLock", in: app), !initialToolLock)
         capture(app, name: "Pen mode and keep-tool-active show independent states")
     }
@@ -198,7 +202,11 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         zoom200.tap()
         menu.tap()
         XCTAssertTrue(app.buttons["toolbar.zoom"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["toolbar.zoom"].label.contains("200"))
+        let zoomChanged = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "200"),
+            object: app.buttons["toolbar.zoom"].firstMatch
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [zoomChanged], timeout: 5), .completed)
         let inspector = app.buttons["toolbar.inspector"].firstMatch
         inspector.swipeUp()
         inspector.tap()
@@ -206,7 +214,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 3))
         search.tap()
         capture(app, name: "Search inspector opened through the native secondary menu")
-        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 5))
     }
 
     private func reopenMenuIfNeeded(_ menu: XCUIElement, in app: XCUIApplication) {
@@ -220,6 +228,23 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let toggle = app.descendants(matching: .any)[identifier].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 3))
         return toggle.isSelected || (toggle.value as? String) == "1"
+    }
+
+    private func waitForMenuToggle(_ identifier: String, toBe enabled: Bool, in app: XCUIApplication) {
+        let toggle = app.descendants(matching: .any)[identifier].firstMatch
+        let state = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (toggle.isSelected || (toggle.value as? String) == "1") == enabled
+        }, object: toggle)
+        XCTAssertEqual(XCTWaiter.wait(for: [state], timeout: 5), .completed)
+    }
+
+    private func setMenuToggle(_ identifier: String, to enabled: Bool, menu: XCUIElement, in app: XCUIApplication) {
+        reopenMenuIfNeeded(menu, in: app)
+        if menuToggleIsOn(identifier, in: app) != enabled {
+            app.descendants(matching: .any)[identifier].firstMatch.tap()
+            reopenMenuIfNeeded(menu, in: app)
+            waitForMenuToggle(identifier, toBe: enabled, in: app)
+        }
     }
 
     private func waitForSelectedState(_ selected: Bool, of element: XCUIElement) {

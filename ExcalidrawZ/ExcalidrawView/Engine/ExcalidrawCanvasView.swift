@@ -232,11 +232,12 @@ struct ExcalidrawCanvasView: View {
 
 #if os(iOS)
     private var usesNativeIPadControls: Bool {
-        type == .normal && interactionEnabled &&
         ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
             isPad: UIDevice.current.userInterfaceIdiom == .pad,
             horizontalSizeClass: containerHorizontalSizeClass,
-            containerWidth: containerSize.width
+            containerWidth: containerSize.width,
+            isNormalEditor: type == .normal,
+            isInteractionEnabled: interactionEnabled
         )
     }
 
