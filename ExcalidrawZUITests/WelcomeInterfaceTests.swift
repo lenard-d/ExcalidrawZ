@@ -56,7 +56,7 @@ final class WelcomeInterfaceTests: XCTestCase {
                 .firstMatch
             scrollToReadableContent(lastFeature, in: scrollView, app: app)
 
-            scrollToHittable(primaryAction, in: scrollView, towardBottom: false)
+            scrollChatActionIntoView(primaryAction, in: scrollView, app: app)
             XCTAssertTrue(primaryAction.isHittable)
             primaryAction.tap()
             assertConsentIsRequired(in: app)
@@ -227,6 +227,30 @@ final class WelcomeInterfaceTests: XCTestCase {
             let elementFrame = element.exists ? "\(element.frame)" : "missing"
             XCTFail("The complete welcome text must fit inside the on-screen scroll viewport. Element: \(elementFrame), scroll view: \(scrollView.frame), window: \(app.windows.firstMatch.frame).")
         }
+    }
+
+    private func scrollChatActionIntoView(
+        _ action: XCUIElement,
+        in scrollView: XCUIElement,
+        app: XCUIApplication
+    ) {
+        let navigationBar = app.navigationBars["AI Chat"]
+        func isReadyToTap() -> Bool {
+            guard action.exists, navigationBar.exists else { return false }
+            let frame = action.frame
+            let viewport = scrollView.frame.intersection(app.windows.firstMatch.frame)
+            return !frame.isEmpty && !viewport.isEmpty
+                && viewport.contains(frame)
+                && frame.minY >= navigationBar.frame.maxY
+                && action.isHittable
+        }
+
+        // A hit point alone does not show that the whole action is below the navigation bar.
+        for _ in 0..<8 {
+            if isReadyToTap() { return }
+            scrollView.swipeDown()
+        }
+        XCTAssertTrue(isReadyToTap(), "The complete AI welcome action must be visible below the navigation bar and hittable.")
     }
 }
 #endif
