@@ -80,6 +80,7 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
             }
         }
         .accessibilityIdentifier("toolbar.moreTools")
+        .accessibilityValue(activeOverflowItem.map { $0.menuTitle(localizedName: $0.tool.localization) } ?? "")
         .menuIndicator(.hidden)
 #if os(iOS)
         .menuOrder(.fixed)
@@ -92,12 +93,24 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
 
     @ViewBuilder
     private var menuLabel: some View {
-        if #available(macOS 15.0, iOS 18.0, *) {
+        if let item = activeOverflowItem {
+            Label {
+                Text(.localizable(.toolbarMoreTools))
+            } icon: {
+                item.tool.icon().frame(width: 20, height: 20)
+            }
+            .foregroundStyle(Color.accentColor)
+        } else if #available(macOS 15.0, iOS 18.0, *) {
             Label(.localizable(.toolbarMoreTools), systemImage: "xmark.triangle.circle.square")
         } else if #available(macOS 13.0, iOS 16.0, *) {
             Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
         } else {
             Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
         }
+    }
+
+    private var activeOverflowItem: ExcalidrawToolbarToolPresentation.Item? {
+        guard usesPrincipalLabel else { return nil }
+        return overflowItems.first { $0.tool == toolState.activatedTool }
     }
 }
