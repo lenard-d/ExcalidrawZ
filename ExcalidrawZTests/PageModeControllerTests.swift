@@ -4,6 +4,28 @@ import XCTest
 
 final class PageModeControllerTests: XCTestCase {
     @MainActor
+    func testOwnerChangeAfterReadRejectsContextAdmissionAndNextMutation() async {
+        var current = true
+        var calls = 0
+        let controller = PageModeController(execute: { _ in
+            calls += 1
+            return #"{"pages":[{"id":"old","title":"Notes","width":595,"height":842,"locked":false}],"openedPageID":null}"#
+        }, render: { _, _ in Data() }, isCurrent: { current })
+        let read = await controller.perform(.init(action: .list))
+        XCTAssertTrue(read)
+        let page = controller.pages[0]
+
+        current = false
+        controller.invalidateIfNeeded()
+        XCTAssertFalse(controller.isValid)
+        XCTAssertTrue(controller.pages.isEmpty)
+
+        let created = await controller.createPage(after: page, placement: .below)
+        XCTAssertFalse(created)
+        XCTAssertEqual(calls, 1)
+    }
+
+    @MainActor
     func testIdleSessionChangeClearsRetainedPagesAndExportWithoutAnotherCommand() async {
         let changes = PassthroughSubject<Void, Never>()
         var generation = 1
