@@ -22,6 +22,60 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    func testPlainAndOptionShortcutsUseObservedConfiguredHints() throws {
+        let app = openSyntheticDrawing()
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        XCTAssertGreaterThanOrEqual(control.buttons.count, 2)
+        let plain = control.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "(1)")).firstMatch
+        XCTAssertTrue(plain.exists, "The first configured tool must expose its plain digit hint")
+        let plainTitle = plain.label
+        let extraTools = app.buttons["toolbar.extraTools"].firstMatch
+        XCTAssertTrue(extraTools.isHittable)
+        let alternatePredicate = NSPredicate(format: "label ENDSWITH %@", "(⌥1)")
+        let alternateDirect = control.buttons.matching(alternatePredicate).firstMatch
+        let alternateTitle: String
+        if alternateDirect.exists {
+            alternateTitle = alternateDirect.label
+            captureEditorPhase(app, name: "Configured direct plain and Option shortcut hints")
+        } else {
+            extraTools.tap()
+            let alternateMenuItem = app.buttons.matching(alternatePredicate).firstMatch
+            XCTAssertTrue(alternateMenuItem.waitForExistence(timeout: 3),
+                          "The overflow must expose configured position eleven with its Option hint")
+            alternateTitle = alternateMenuItem.label
+            captureEditorPhase(app, name: "Configured overflow Option shortcut hint before keyboard input")
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.65)).tap()
+            let dismissed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: alternateMenuItem
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 3), .completed)
+        }
+        let canvas = app.webViews.firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        canvas.tap()
+        control.buttons.element(boundBy: 1).tap()
+        app.typeKey("1", modifierFlags: [])
+        assertSelection(plain, control: control)
+        captureEditorPhase(app, name: "Plain 1 selects observed configured hint \(plainTitle)")
+
+        app.typeKey("1", modifierFlags: .option)
+        if alternateDirect.exists {
+            assertSelection(alternateDirect, control: control)
+        } else {
+            let selected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", alternateTitle), object: extraTools
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 3), .completed,
+                           "Option 1 must activate the tool named by the observed overflow hint")
+            XCTAssertFalse(control.buttons.allElementsBoundByIndex.contains(where: \.isSelected))
+        }
+        captureEditorPhase(app, name: "Option 1 selects observed configured hint \(alternateTitle)")
+        app.typeKey("1", modifierFlags: [])
+        assertSelection(plain, control: control)
+        XCTAssertEqual(extraTools.value as? String, "")
+    }
+
     func testRealToolQuickTapsAndBothScrubDirections() {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
