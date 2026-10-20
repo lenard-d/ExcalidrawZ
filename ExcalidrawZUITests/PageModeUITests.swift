@@ -280,6 +280,31 @@ final class PageModeUITests: XCTestCase {
         try assertLayout("Ruled", in: app)
     }
 
+    /// Captures actual canvas handles before a resize route can use their screen positions.
+    func testCaptureSyntheticPageResizeHandles() throws {
+        let app = try openSyntheticDrawing()
+        try selectTool("Selection", in: app)
+        try openPages(in: app)
+        let add = app.buttons["pages.add"].firstMatch
+        try requireHittable(add, in: app, step: "Create a fresh page for resize capture")
+        add.tap()
+        try selectPage("Page 1", in: app)
+        try setLayout("Grid", in: app)
+        try assertContext(in: app, page: "Page 1", step: "Resize capture: normal Grid page and handles")
+        try setLayout("Ruled", in: app)
+        capture(app, step: "Resize capture: normal Ruled page and handles")
+
+        try addPage("Add right", in: app)
+        try openPages(in: app)
+        let overview = app.buttons["Canvas"].firstMatch
+        try requireHittable(overview, in: app, step: "Resize capture: public canvas overview")
+        overview.tap()
+        try selectPage("Page 1", in: app)
+        try assertContext(in: app, page: "Page 1", step: "Resize capture: overview top handle and controls")
+        // Canvas handles have no accessibility element. Root must inspect these captures
+        // before supplying a drag route. This test does not claim a resize passed.
+    }
+
     private func openSyntheticDrawing() throws -> XCUIApplication {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()
@@ -314,7 +339,8 @@ final class PageModeUITests: XCTestCase {
     }
 
     private func openPages(in app: XCUIApplication) throws {
-        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        let extraTools = app.buttons["toolbar.extraTools"].firstMatch
+        let menu = extraTools.exists ? extraTools : app.buttons["toolbar.moreTools"].firstMatch
         try requireHittable(menu, in: app, step: "Public tool actions menu")
         menu.tap()
         let pages = app.buttons["Pages"].firstMatch
