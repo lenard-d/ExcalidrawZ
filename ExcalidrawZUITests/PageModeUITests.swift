@@ -113,8 +113,7 @@ final class PageModeUITests: XCTestCase {
 
         let showSidebar = app.buttons["Show Sidebar"].firstMatch
         if showSidebar.exists && showSidebar.isHittable { showSidebar.tap() }
-        let sidebar = app.collectionViews["Sidebar"].firstMatch
-        let home = sidebar.buttons["Home"].firstMatch
+        let home = app.buttons["Home"].firstMatch
         try requireHittable(home, in: app, step: "Leave the exact synthetic drawing through Home")
         home.tap()
         capture(app, step: "Synthetic drawing left through Home before process restart")
@@ -122,7 +121,7 @@ final class PageModeUITests: XCTestCase {
         app.launch()
         let reopenSidebar = app.buttons["Show Sidebar"].firstMatch
         if reopenSidebar.exists && reopenSidebar.isHittable { reopenSidebar.tap() }
-        let savedDrawing = app.collectionViews["Sidebar"].staticTexts[drawingName].firstMatch
+        let savedDrawing = app.scrollViews.containing(.button, identifier: "Home").staticTexts[drawingName].firstMatch
         try requireHittable(savedDrawing, in: app, step: "Reopen the exact unique synthetic drawing after process restart")
         savedDrawing.tap()
         try selectTool("Selection", in: app)
@@ -140,6 +139,48 @@ final class PageModeUITests: XCTestCase {
         try requireHittable(exportPDF, in: app, step: "Normal Pages PDF export action")
         exportPDF.tap()
         capture(app, step: "STOP: actual Pages PDF exporter before choosing a destination")
+    }
+
+    func testReopenNamedSyntheticDuplicateAndInspectPDFExporter() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AIChat.isEnabled", "NO", "-DisableCloudSync", "YES",
+            "-WhatsNewLastBuild", "999999"
+        ]
+        launchedApp = app
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launch()
+        let showSidebar = app.buttons["Show Sidebar"].firstMatch
+        if showSidebar.exists && showSidebar.isHittable { showSidebar.tap() }
+        let home = app.buttons["Home"].firstMatch
+        try requireHittable(home, in: app, step: "Observed Home button before reopening known synthetic drawing")
+        home.tap()
+        capture(app, step: "Home before process restart, known synthetic duplicate retained")
+        app.terminate()
+        app.launch()
+        let reopenSidebar = app.buttons["Show Sidebar"].firstMatch
+        if reopenSidebar.exists && reopenSidebar.isHittable { reopenSidebar.tap() }
+        // This exact name was created and captured by the prior public duplicate run.
+        let savedDrawing = app.scrollViews.containing(.button, identifier: "Home")
+            .staticTexts["Pages-Duplicate-DDB10D13"].firstMatch
+        try requireHittable(savedDrawing, in: app, step: "Exact synthetic drawing in observed sidebar ScrollView")
+        savedDrawing.tap()
+        try selectTool("Selection", in: app)
+        try openPages(in: app)
+        let copy = app.buttons["pages.open.1"].firstMatch
+        try requireHittable(copy, in: app, step: "Persisted duplicate after Home and process restart")
+        XCTAssertTrue(app.buttons["pages.open.0"].exists)
+        XCTAssertFalse(app.buttons["pages.open.2"].exists)
+        capture(app, step: "Persisted original and copy in Pages after restart")
+        copy.tap()
+        try assertLayout("Grid", in: app)
+        capture(app, step: "Persisted duplicated Grid page and ink after restart")
+        try openPages(in: app)
+        let exportPDF = app.buttons["Export pages as PDF"].firstMatch
+        try requireHittable(exportPDF, in: app, step: "Normal PDF export for reopened synthetic duplicate")
+        exportPDF.tap()
+        capture(app, step: "STOP: actual PDF save dialog for reopened synthetic duplicate")
     }
 
     func testSyntheticPageContextLayoutsAndBothAddDirections() throws {
