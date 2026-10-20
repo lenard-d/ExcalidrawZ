@@ -75,7 +75,7 @@ final class PageModeControllerTests: XCTestCase {
     }
 
     @MainActor
-    func testCreateOpensReturnedIDRatherThanLastRowAndInheritsSelectedPageLayout() async {
+    func testCreateOpensReturnedIDRatherThanLastRowAndReferencesSelectedPage() async {
         var commands: [PageModeCommand] = []
         let result = #"{"pages":[{"id":"new","title":"New","width":842,"height":595,"locked":false,"layout":"ruled"},{"id":"last","title":"Last","width":595,"height":842,"locked":false}],"openedPageID":"new"}"#
         let controller = PageModeController(execute: { command in
@@ -87,9 +87,6 @@ final class PageModeControllerTests: XCTestCase {
         XCTAssertTrue(success)
         XCTAssertEqual(commands.map(\.action), [.add, .open])
         XCTAssertEqual(commands.last?.pageID, "new")
-        XCTAssertEqual(commands.first?.width, 842)
-        XCTAssertEqual(commands.first?.height, 595)
-        XCTAssertEqual(commands.first?.layout, .ruled)
         XCTAssertEqual(commands.first?.pageID, "old")
         XCTAssertEqual(commands.first?.placement, .right)
     }
