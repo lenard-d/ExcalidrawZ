@@ -198,7 +198,7 @@ final class PageModeUITests: XCTestCase {
         }
         try requireHittable(exportPDF, in: app, step: "Normal PDF export for reopened synthetic duplicate")
         exportPDF.tap()
-        capture(app, step: "STOP: actual PDF save dialog for reopened synthetic duplicate")
+        capture(app, step: "STOP: Pages PDF export requested, inspect destination separately")
     }
 
     private func dismissObservedWhatsNew(in app: XCUIApplication) {

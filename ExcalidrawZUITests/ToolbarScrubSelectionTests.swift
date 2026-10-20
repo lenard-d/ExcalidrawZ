@@ -332,12 +332,20 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
         XCTAssertTrue(share.isHittable)
-        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
-        let cursor = tool(named: "Selection", in: control)
-        XCTAssertTrue(cursor.isHittable)
-        cursor.tap()
-        assertSelection(cursor, control: control)
-        captureEditorPhase(app, name: "Share menu dismissed, editor responds to Selection")
+        let style = app.buttons["toolbar.style"].firstMatch
+        XCTAssertTrue(style.isHittable)
+        let originalStyle = style.isSelected
+        style.tap()
+        let changed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: !originalStyle)), object: style
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
+        style.tap()
+        let restored = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: originalStyle)), object: style
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
+        captureEditorPhase(app, name: "Share menu dismissed, Style responds and returns to its original state")
     }
 
     func testUndoThenTapOpensRedoMenu() {
