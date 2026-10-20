@@ -73,6 +73,9 @@ final class PDFInsertSheetUITests: XCTestCase {
         let increment = stepper.buttons["pdfInsert.itemsPerLine-Increment"]
         scrollToVisible(increment, in: settings)
         XCTAssertTrue(stepper.exists)
+        XCTAssertFalse(stepper.frame.isEmpty)
+        XCTAssertTrue(settings.frame.contains(stepper.frame), "The full Stepper must fit in the settings area.")
+        XCTAssertTrue(app.otherElements["pdfFixture.viewport"].frame.contains(stepper.frame))
         XCTAssertTrue(settings.frame.contains(increment.frame), "The settings scroll must expose the stepper.")
         increment.tap()
         XCTAssertEqual(app.buttons["pdfInsert.confirm"].frame, insertFrame)
@@ -146,6 +149,7 @@ final class PDFInsertSheetUITests: XCTestCase {
         // Form can remove the previously visible row from the public hierarchy.
         let didScroll = !viewerOption.exists || viewerOption.frame != initialOptionFrame
         XCTAssertTrue(didScroll, "The mode row must move or leave the viewport after scrolling.")
+        scrollToLowerBoundary(in: viewport, app: app)
         XCTAssertEqual(app.buttons["pdfInsert.confirm"].frame, initialInsertFrame, "Insert must stay fixed while content scrolls.")
         assertActions(in: app, size: size)
         assertInsertCallback(in: app)
@@ -221,6 +225,23 @@ final class PDFInsertSheetUITests: XCTestCase {
             scrollView.swipeUp()
         }
         XCTAssertTrue(element.exists && element.isHittable, "The named settings control must be reachable by scrolling.")
+    }
+
+    private func scrollToLowerBoundary(in viewport: XCUIElement, app: XCUIApplication) {
+        let footer = app.staticTexts["4 pages"]
+        var reachedLowerBoundary = false
+        for _ in 0..<16 {
+            viewport.swipeUp()
+            guard footer.exists else { continue }
+            let footerFrame = footer.frame
+            guard !footerFrame.isEmpty, viewport.frame.contains(footerFrame), footer.isHittable else { continue }
+            viewport.swipeUp()
+            if footer.exists && footer.frame == footerFrame {
+                reachedLowerBoundary = true
+                break
+            }
+        }
+        XCTAssertTrue(reachedLowerBoundary, "The page-count footer must be fully visible and stay fixed after an extra swipe at the lower boundary.")
     }
 }
 #endif
