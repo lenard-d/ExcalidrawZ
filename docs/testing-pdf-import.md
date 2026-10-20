@@ -8,9 +8,53 @@ simulator builds. No private scheme or test-plan generator is needed.
 
 ## Prepare the checkout and isolated configuration
 
-Prepare the web resources and minimal local `Config/Secrets.plist` described in
-the [development guide](../README.md#development-guide). Use only the placeholder
-`COLLAB_URL=https://example.com`, without provider credentials, for these tests.
+The app needs the ignored `ExcalidrawZ/Resources/excalidraw-latest` directory,
+including its complete web build. A fresh checkout does not contain it. Build
+the public [ExcalidrawZ core](https://github.com/chocoford/excalidraw/tree/91a3edf6a618da14fb5c04b0e3568b1cbb5991aa)
+at the pinned revision below. Use Git, npm and Node.js 22. The core declares Node.js
+18 or later; the prepared validation resources used Node.js 22 and Yarn 1.22.22.
+
+Run this block from the ExcalidrawZ checkout root. It prepares a separate temporary
+source directory and copies the whole build to the app's exact resource path.
+It stops if that destination already exists; inspect and retain an existing
+prepared build instead of replacing it.
+
+```sh
+(
+  set -eu
+  PDF_UI_CHECKOUT="$PWD"
+  PDF_UI_WEB_DEST="$PDF_UI_CHECKOUT/ExcalidrawZ/Resources/excalidraw-latest"
+  test -f "$PDF_UI_CHECKOUT/ExcalidrawZ.xcodeproj/project.pbxproj"
+  test ! -e "$PDF_UI_WEB_DEST"
+  PDF_UI_WEB_WORK=$(mktemp -d "${TMPDIR:-/tmp}/excalidrawz-pdf-resources.XXXXXX")
+  git clone --branch ExcalidrawZ-core \
+    https://github.com/chocoford/excalidraw.git "$PDF_UI_WEB_WORK/core"
+  git -C "$PDF_UI_WEB_WORK/core" checkout --detach \
+    91a3edf6a618da14fb5c04b0e3568b1cbb5991aa
+  npm install --prefix "$PDF_UI_WEB_WORK/tools" --no-audit --no-fund yarn@1.22.22
+  export PATH="$PDF_UI_WEB_WORK/tools/node_modules/.bin:$PATH"
+  cd "$PDF_UI_WEB_WORK/core"
+  HUSKY=0 yarn install --frozen-lockfile --non-interactive
+  yarn workspace excalidraw-app build:app:docker
+  yarn workspace excalidraw-app build:version
+  test -f excalidraw-app/build/index.html
+  test -f excalidraw-app/build/version.json
+  ditto excalidraw-app/build "$PDF_UI_WEB_DEST"
+  git -C "$PDF_UI_CHECKOUT" check-ignore \
+    ExcalidrawZ/Resources/excalidraw-latest/index.html
+)
+```
+
+The Docker-named build script runs Vite locally with Sentry disabled. It does not
+require Docker. Preserve the core's `yarn.lock` and the app's `Package.resolved`.
+Keep the generated resources and tool installation out of Git. This resource
+procedure was used for the prepared validation build; the PDF test fixture
+itself uses only an in-memory synthetic PDF.
+
+Create the minimal local `Config/Secrets.plist` described in the
+[development guide](../README.md#development-guide) only if it is absent. Use only
+the placeholder `COLLAB_URL=https://example.com`, without provider credentials,
+for these tests. Do not copy an existing private Secrets file.
 
 Use an isolated validation checkout with configured runtime cloud identifiers
 and build-time CloudKit disabling. Until those changes are part of main, the
