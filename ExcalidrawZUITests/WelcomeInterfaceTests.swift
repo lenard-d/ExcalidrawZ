@@ -47,8 +47,7 @@ final class WelcomeInterfaceTests: XCTestCase {
 
         for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
             XCUIDevice.shared.orientation = orientation
-            let lastFeature = scrollView.descendants(matching: .any)
-                .matching(identifier: "aiChatWelcomeRevertFeature")
+            let lastFeature = scrollView.staticTexts
                 .matching(NSPredicate(
                     format: "label CONTAINS %@ AND label CONTAINS %@",
                     "Revert any turn",
