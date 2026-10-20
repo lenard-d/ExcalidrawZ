@@ -20,7 +20,7 @@ struct ExcalidrawToolbarToolPresentation {
         self.order = order
         // Assign shortcuts before any layout partition or compact menu filter.
         self.items = order.tools.map {
-            Item(tool: $0, shortcutLabel: order.shortcutLabel(for: $0))
+            Item(tool: $0, shortcutLabel: order.shortcutLabel(for: $0, includingAlternate: true))
         }
     }
 

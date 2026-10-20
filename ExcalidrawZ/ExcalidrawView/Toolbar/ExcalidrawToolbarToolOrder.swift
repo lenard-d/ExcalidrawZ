@@ -80,18 +80,19 @@ struct ExcalidrawToolbarToolOrder: Equatable, Hashable {
         )
     }
 
-    func shortcutLabel(for tool: ExcalidrawTool) -> String? {
+    func shortcutLabel(for tool: ExcalidrawTool, includingAlternate: Bool = false) -> String? {
         guard tool.supportsOrderedNumericShortcut,
               let index = tools.firstIndex(of: tool),
-              index < Self.shortcutLabels.count else {
+              index < Self.shortcutLabels.count * (includingAlternate ? 2 : 1) else {
             return nil
         }
-        return Self.shortcutLabels[index]
+        let prefix = index >= Self.shortcutLabels.count ? "⌥" : ""
+        return prefix + Self.shortcutLabels[index % Self.shortcutLabels.count]
     }
 
-    func tool(forShortcutNumber number: Int) -> ExcalidrawTool? {
+    func tool(forShortcutNumber number: Int, alternate: Bool = false) -> ExcalidrawTool? {
         guard (0...9).contains(number) else { return nil }
-        let index = number == 0 ? 9 : number - 1
+        let index = (number == 0 ? 9 : number - 1) + (alternate ? Self.shortcutLabels.count : 0)
         guard tools.indices.contains(index) else { return nil }
 
         let tool = tools[index]

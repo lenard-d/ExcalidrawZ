@@ -132,17 +132,23 @@ class ExcalidrawCore: NSObject, ObservableObject {
             configuration: config
         ) { key in
             switch key {
-                case .number(let int):
+                case .number(let int), .alternateNumber(let int):
+                    let alternate: Bool
+                    if case .alternateNumber = key {
+                        alternate = true
+                    } else {
+                        alternate = false
+                    }
                     Task { @MainActor in
                         let toolOrder = self.parent?.appPreference.toolbarToolOrder
                             ?? ExcalidrawToolbarToolOrder()
-                        if let tool = toolOrder.tool(forShortcutNumber: int) {
+                        if let tool = toolOrder.tool(forShortcutNumber: int, alternate: alternate) {
                             guard let toolState = self.parent?.toolState,
                                   toolState.excalidrawWebCoordinator === self else {
                                 return
                             }
                             try? await toolState.toggleTool(tool)
-                        } else if self.parent == nil {
+                        } else if self.parent == nil, !alternate {
                             try? await self.toggleToolbarAction(key: int)
                         }
                     }
