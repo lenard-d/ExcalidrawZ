@@ -192,6 +192,10 @@ final class PageModeUITests: XCTestCase {
         capture(app, step: "Persisted duplicated Grid page and ink after restart")
         try openPages(in: app)
         let exportPDF = app.buttons["Export pages as PDF"].firstMatch
+        let pagesList = app.collectionViews.containing(.button, identifier: "Export pages as PDF").firstMatch
+        if pagesList.exists {
+            for _ in 0..<3 where !exportPDF.isHittable { pagesList.swipeUp(velocity: .slow) }
+        }
         try requireHittable(exportPDF, in: app, step: "Normal PDF export for reopened synthetic duplicate")
         exportPDF.tap()
         capture(app, step: "STOP: actual PDF save dialog for reopened synthetic duplicate")

@@ -322,9 +322,11 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(file.isHittable)
         XCTAssertTrue(pdf.isHittable)
         captureEditorPhase(app, name: "Share presents the observed Image, File and PDF menu")
-        let canvas = app.webViews.firstMatch
-        XCTAssertTrue(canvas.isHittable)
-        canvas.tap()
+        // The observed Share menu occupies only the upper-right corner.
+        let window = app.windows.firstMatch
+        let outside = CGPoint(x: window.frame.midX, y: window.frame.midY)
+        XCTAssertFalse(image.frame.contains(outside) || file.frame.contains(outside) || pdf.frame.contains(outside))
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             !image.exists && !file.exists && !pdf.exists
         }, object: nil)
