@@ -27,7 +27,7 @@ final class CanvasSaveCoordinatorTests: XCTestCase {
         let captures = CanvasSaveCoordinator()
         let owner = owner()
         try await register(files, url, owner)
-        let scheduler = ExcalidrawDocumentContentSnapshotScheduler {}
+        let scheduler = ExcalidrawDocumentContentSnapshotScheduler { _ in }
         defer { scheduler.reset() }
         scheduler.recordPendingContentDirty(fileID: owner.fileID, revision: 1)
         let oldState = try XCTUnwrap(scheduler.takeFlushState())

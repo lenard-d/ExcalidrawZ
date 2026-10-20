@@ -6,7 +6,7 @@ final class ExternalCanvasReloadRequestTests: XCTestCase {
     @MainActor
     func testEditBetweenPostedRequestAndLoadStartKeepsPendingScene() async throws {
         var edits = ExternalCanvasEditState()
-        let scheduler = ExcalidrawDocumentContentSnapshotScheduler {}
+        let scheduler = ExcalidrawDocumentContentSnapshotScheduler { _ in }
         let capturedRevision = edits.revision
         var installed = false
         var rejected = false

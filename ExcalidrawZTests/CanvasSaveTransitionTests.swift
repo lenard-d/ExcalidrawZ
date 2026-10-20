@@ -15,7 +15,7 @@ final class CanvasSaveTransitionTests: XCTestCase {
             try Data("unchanged B".utf8).write(to: second)
             let captures = CanvasSaveCoordinator()
             let files = ExternalFileSaveCoordinator()
-            let scheduler = ExcalidrawDocumentContentSnapshotScheduler {}
+            let scheduler = ExcalidrawDocumentContentSnapshotScheduler { _ in }
             defer { scheduler.reset() }
             let outgoing = CanvasMutationSession(fileID: "library A", saveSession: UUID(), loadGeneration: 1)
             var active = outgoing
