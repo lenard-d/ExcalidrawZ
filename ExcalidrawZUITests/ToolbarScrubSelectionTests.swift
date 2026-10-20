@@ -27,17 +27,31 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(control.buttons.count, 6)
         XCTAssertGreaterThanOrEqual(control.frame.minX, 0)
         XCTAssertLessThanOrEqual(control.frame.maxX, app.windows.firstMatch.frame.maxX)
+        let canvas = app.webViews.firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+        XCTAssertGreaterThan(canvas.frame.width, 300)
+        XCTAssertGreaterThan(canvas.frame.height, 300)
 
         for index in [2, 0, 1] {
             control.buttons.element(boundBy: index).tap()
             assertSelection(index, control: control)
         }
+        control.buttons.element(boundBy: 2).tap()
+        assertSelection(2, control: control)
+        drag(in: canvas, from: CGVector(dx: 0.25, dy: 0.35), to: CGVector(dx: 0.40, dy: 0.55))
+        capture(app, name: "Canvas diamond after quick tap, inspect actual shape")
+
         let first = control.buttons.element(boundBy: 0)
         let sixth = control.buttons.element(boundBy: 5)
         first.press(forDuration: 0.3, thenDragTo: sixth, withVelocity: .slow, thenHoldForDuration: 0.3)
         assertSelection(5, control: control)
+        drag(in: canvas, from: CGVector(dx: 0.55, dy: 0.35), to: CGVector(dx: 0.75, dy: 0.55))
+        capture(app, name: "Canvas line after forward scrub, inspect actual line")
+
         sixth.press(forDuration: 0.3, thenDragTo: first, withVelocity: .slow, thenHoldForDuration: 0.3)
         assertSelection(0, control: control)
+        drag(in: canvas, from: CGVector(dx: 0.20, dy: 0.30), to: CGVector(dx: 0.45, dy: 0.60))
+        capture(app, name: "Canvas diamond selection after reverse scrub, inspect selection handles")
 
         // Start at the former divider between the second and third tools.
         let second = control.buttons.element(boundBy: 1)
@@ -50,11 +64,23 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         sixth.tap()
         assertSelection(5, control: control)
 
+        capture(app, name: "Real configured tools after quick taps and forward-reverse scrub")
+        // Root records video to verify the native selection preview during the drag.
+    }
+
+    private func drag(in canvas: XCUIElement, from start: CGVector, to end: CGVector) {
+        canvas.coordinate(withNormalizedOffset: start).press(
+            forDuration: 0.05, thenDragTo: canvas.coordinate(withNormalizedOffset: end),
+            withVelocity: .slow, thenHoldForDuration: 0.1
+        )
+    }
+
+    private func capture(_ app: XCUIApplication, name: String) {
+        // These artifacts require root's image inspection, not only a green XCTest result.
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Real configured tools after quick taps and forward-reverse scrub"
+        screenshot.name = name
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        // Root records video to verify the native selection preview during the drag.
     }
 
     private func assertSelection(_ index: Int, control: XCUIElement) {
