@@ -12,6 +12,9 @@ import SFSafeSymbols
 struct ExcalidrawToolbarMoreToolsMenu: View {
     @EnvironmentObject private var toolState: ToolState
 
+    var overflowItems: [ExcalidrawToolbarToolPresentation.Item] = []
+    var usesPrincipalLabel = false
+
     @State private var isMathInputSheetPresented = false
     @State private var isMermaidInputSheetPresented = false
     @State private var isPDFPickerPresented = false
@@ -19,6 +22,24 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
 
     var body: some View {
         Menu {
+            if !overflowItems.isEmpty {
+                Section {
+                    Picker(selection: $toolState.activatedTool) {
+                        ForEach(overflowItems) { item in
+                            Label {
+                                Text(item.menuTitle(localizedName: item.tool.localization))
+                            } icon: {
+                                Image(systemSymbol: item.tool.menuSystemSymbol)
+                            }
+                            .tag(item.tool)
+                        }
+                    } label: {
+                        Text(.localizable(.toolbarActiveToolTitle))
+                    }
+                    .pickerStyle(.inline)
+                }
+                Divider()
+            }
 #if DEBUG
 #if !os(iOS)
             Button {
@@ -52,14 +73,13 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
                 isPageModeSheetPresented = true
             }
         } label: {
-            if #available(macOS 15.0, iOS 18.0, *) {
-                Label(.localizable(.toolbarMoreTools), systemImage: "xmark.triangle.circle.square")
-            } else if #available(macOS 13.0, iOS 16.0, *) {
-                Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
+            if usesPrincipalLabel {
+                menuLabel.labelStyle(.iconOnly).frame(width: 32, height: 32)
             } else {
-                Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
+                menuLabel
             }
         }
+        .accessibilityIdentifier("toolbar.moreTools")
         .menuIndicator(.hidden)
 #if os(iOS)
         .menuOrder(.fixed)
@@ -68,5 +88,16 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
         .modifier(MathInputSheetViewModifier(isPresented: $isMathInputSheetPresented))
         .modifier(PDFInsertSheetViewModifier(isPresented: $isPDFPickerPresented))
         .modifier(PageModeSheetModifier(isPresented: $isPageModeSheetPresented))
+    }
+
+    @ViewBuilder
+    private var menuLabel: some View {
+        if #available(macOS 15.0, iOS 18.0, *) {
+            Label(.localizable(.toolbarMoreTools), systemImage: "xmark.triangle.circle.square")
+        } else if #available(macOS 13.0, iOS 16.0, *) {
+            Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
+        } else {
+            Label(.localizable(.toolbarMoreTools), systemSymbol: .chartXyaxisLine)
+        }
     }
 }
