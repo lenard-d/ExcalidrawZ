@@ -37,6 +37,7 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
         private var renderedFooter: Bool?
         private var renderedScale: CGFloat?
         private struct Contact {
+            let touch: UITouch
             let items: [ExcalidrawToolbarToolPresentation.Item]
             let initialSelection: ExcalidrawTool?
             var invalidated = false
@@ -127,36 +128,40 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
         }
 
         @objc private func touchDown(_ control: UISegmentedControl, event: UIEvent?) {
-            guard let point = event?.allTouches?.first?.location(in: control) else { return }
-            beginContact(control, at: point)
+            guard let touches = event?.touches(for: control), touches.count == 1,
+                  let touch = touches.first else { return }
+            beginContact(control, touch: touch, at: touch.location(in: control))
         }
 
         @objc private func touchMoved(_ control: UISegmentedControl, event: UIEvent?) {
-            guard let point = event?.allTouches?.first?.location(in: control) else { return }
-            moveContact(control, to: point)
+            guard let touch = contact?.touch,
+                  event?.touches(for: control)?.contains(touch) == true else { return }
+            moveContact(control, touch: touch, to: touch.location(in: control))
         }
 
         @objc private func touchReleased(_ control: UISegmentedControl, event: UIEvent?) {
-            guard let point = event?.allTouches?.first?.location(in: control) else {
+            guard let touch = contact?.touch else { return }
+            guard let touches = event?.touches(for: control) else {
                 cancelContact(control)
                 return
             }
-            endContact(control, at: point)
+            guard touches.contains(touch) else { return }
+            endContact(control, touch: touch, at: touch.location(in: control))
         }
 
         @objc private func touchCancelled(_ control: UISegmentedControl) {
             cancelContact(control)
         }
 
-        func beginContact(_ control: UISegmentedControl, at point: CGPoint) {
-            guard control.isEnabled, segment(at: point, in: control) != nil else { return }
+        func beginContact(_ control: UISegmentedControl, touch: UITouch, at point: CGPoint) {
+            guard contact == nil, control.isEnabled, segment(at: point, in: control) != nil else { return }
             isFinishingContact = false
-            contact = Contact(items: displayedItems, initialSelection: selection.wrappedValue)
-            moveContact(control, to: point)
+            contact = Contact(touch: touch, items: displayedItems, initialSelection: selection.wrappedValue)
+            moveContact(control, touch: touch, to: point)
         }
 
-        func moveContact(_ control: UISegmentedControl, to point: CGPoint) {
-            guard let contact, !contact.invalidated else { return }
+        func moveContact(_ control: UISegmentedControl, touch: UITouch, to point: CGPoint) {
+            guard let contact, contact.touch === touch, !contact.invalidated else { return }
             guard let index = segment(at: point, in: control) else {
                 restoreSelection(control)
                 return
@@ -164,8 +169,9 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
             control.selectedSegmentIndex = index
         }
 
-        func endContact(_ control: UISegmentedControl, at point: CGPoint) {
-            if let contact, !contact.invalidated,
+        func endContact(_ control: UISegmentedControl, touch: UITouch, at point: CGPoint) {
+            guard let contact, contact.touch === touch else { return }
+            if !contact.invalidated,
                contact.initialSelection == selection.wrappedValue,
                contact.items == displayedItems,
                let index = segment(at: point, in: control) {

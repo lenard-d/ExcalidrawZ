@@ -6,31 +6,54 @@ import XCTest
 
 @MainActor
 final class ToolbarUIKitPickerTests: XCTestCase {
+    func testUnrelatedTouchCannotReplaceMoveOrCommitHeldContact() {
+        let items = ExcalidrawToolbarToolPresentation(order: .init()).items
+        var selected: ExcalidrawTool? = .ellipse
+        let binding = Binding(get: { selected }, set: { selected = $0 })
+        let (coordinator, control) = makePicker(items: items, selection: binding)
+        let touch = UITouch()
+        let unrelated = UITouch()
+
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
+        coordinator.beginContact(control, touch: unrelated, at: CGPoint(x: 100, y: 22))
+        coordinator.moveContact(control, touch: unrelated, to: CGPoint(x: 220, y: 22))
+        coordinator.endContact(control, touch: unrelated, at: CGPoint(x: 220, y: 22))
+        XCTAssertEqual(selected, .ellipse)
+        XCTAssertEqual(control.selectedSegmentIndex, 0)
+
+        coordinator.moveContact(control, touch: touch, to: CGPoint(x: 220, y: 22))
+        XCTAssertEqual(control.selectedSegmentIndex, 5)
+        XCTAssertEqual(selected, .ellipse)
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: 220, y: 22))
+        XCTAssertEqual(selected, .line)
+    }
+
     func testContactPreviewsBothDirectionsButCommitsOnlyRelease() {
         let items = ExcalidrawToolbarToolPresentation(order: .init(tools: [.laser, .frame, .ellipse])).items
         var selected: ExcalidrawTool? = .cursor
         let binding = Binding(get: { selected }, set: { selected = $0 })
         let (coordinator, control) = makePicker(items: items, selection: binding)
+        let touch = UITouch()
 
-        coordinator.beginContact(control, at: CGPoint(x: 20, y: 22))
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
         XCTAssertEqual(control.selectedSegmentIndex, 0)
         XCTAssertEqual(selected, .cursor)
-        coordinator.moveContact(control, to: CGPoint(x: 260, y: 22))
+        coordinator.moveContact(control, touch: touch, to: CGPoint(x: 260, y: 22))
         XCTAssertEqual(control.selectedSegmentIndex, 6)
-        coordinator.moveContact(control, to: CGPoint(x: 100, y: 22))
+        coordinator.moveContact(control, touch: touch, to: CGPoint(x: 100, y: 22))
         XCTAssertEqual(control.selectedSegmentIndex, 2)
         // The former divider belongs to the next segment without a gap.
-        coordinator.moveContact(control, to: CGPoint(x: 40, y: 22))
+        coordinator.moveContact(control, touch: touch, to: CGPoint(x: 40, y: 22))
         XCTAssertEqual(control.selectedSegmentIndex, 1)
         XCTAssertEqual(selected, .cursor)
         control.sendActions(for: .valueChanged)
         XCTAssertEqual(selected, .cursor, "Native valueChanged must not commit a held preview")
-        coordinator.endContact(control, at: CGPoint(x: 100, y: 22))
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: 100, y: 22))
         XCTAssertEqual(selected, .ellipse)
         XCTAssertEqual(control.selectedSegmentIndex, 2)
 
-        coordinator.beginContact(control, at: CGPoint(x: 20, y: 22))
-        coordinator.endContact(control, at: CGPoint(x: 20, y: 22))
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
         XCTAssertEqual(selected, .laser, "An ordinary quick tap must commit its own tool")
     }
 
@@ -39,15 +62,16 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         var selected: ExcalidrawTool? = .ellipse
         let binding = Binding(get: { selected }, set: { selected = $0 })
         let (coordinator, control) = makePicker(items: items, selection: binding)
-        coordinator.beginContact(control, at: CGPoint(x: 20, y: 22))
+        let touch = UITouch()
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
         control.sendActions(for: .touchCancel)
         XCTAssertEqual(selected, .ellipse)
         XCTAssertEqual(control.selectedSegmentIndex, 3)
 
-        coordinator.beginContact(control, at: CGPoint(x: 20, y: 22))
-        coordinator.moveContact(control, to: CGPoint(x: -1, y: 22))
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
+        coordinator.moveContact(control, touch: touch, to: CGPoint(x: -1, y: 22))
         XCTAssertEqual(control.selectedSegmentIndex, 3)
-        coordinator.endContact(control, at: CGPoint(x: -1, y: 22))
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: -1, y: 22))
         XCTAssertEqual(selected, .ellipse)
         control.selectedSegmentIndex = 0
         control.sendActions(for: .valueChanged)
@@ -65,7 +89,8 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         var oldSelection: ExcalidrawTool? = .cursor
         let oldBinding = Binding(get: { oldSelection }, set: { oldSelection = $0 })
         let (coordinator, control) = makePicker(items: initial, selection: oldBinding)
-        coordinator.beginContact(control, at: CGPoint(x: 100, y: 22))
+        let touch = UITouch()
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: 100, y: 22))
 
         var selected: ExcalidrawTool? = .ellipse
         let newBinding = Binding(get: { selected }, set: { selected = $0 })
@@ -73,8 +98,8 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         coordinator.update(control, items: reordered, selection: newBinding, size: 20, withFooter: true, scale: 1)
         XCTAssertEqual(control.imageForSegment(at: 0)?.accessibilityLabel,
                        initial[0].menuTitle(localizedName: initial[0].tool.localization))
-        coordinator.moveContact(control, to: CGPoint(x: 20, y: 22))
-        coordinator.endContact(control, at: CGPoint(x: 20, y: 22))
+        coordinator.moveContact(control, touch: touch, to: CGPoint(x: 20, y: 22))
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
         XCTAssertEqual(selected, .ellipse)
         XCTAssertEqual(oldSelection, .cursor)
 
@@ -84,8 +109,8 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         XCTAssertEqual(control.imageForSegment(at: 0)?.accessibilityLabel,
                        reordered[0].menuTitle(localizedName: reordered[0].tool.localization))
         XCTAssertEqual(control.selectedSegmentIndex, 1)
-        coordinator.beginContact(control, at: CGPoint(x: 20, y: 22))
-        coordinator.endContact(control, at: CGPoint(x: 20, y: 22))
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
         XCTAssertEqual(selected, .laser)
     }
 
@@ -94,18 +119,19 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         var selected: ExcalidrawTool? = .cursor
         let binding = Binding(get: { selected }, set: { selected = $0 })
         let (coordinator, control) = makePicker(items: items, selection: binding)
+        let touch = UITouch()
         control.semanticContentAttribute = .forceRightToLeft
         XCTAssertEqual(control.effectiveUserInterfaceLayoutDirection, .rightToLeft)
-        coordinator.beginContact(control, at: CGPoint(x: control.bounds.maxX - 20, y: 22))
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: control.bounds.maxX - 20, y: 22))
         XCTAssertEqual(control.selectedSegmentIndex, 0)
-        coordinator.moveContact(control, to: CGPoint(x: 20, y: 22))
+        coordinator.moveContact(control, touch: touch, to: CGPoint(x: 20, y: 22))
         XCTAssertEqual(control.selectedSegmentIndex, items.count - 1)
-        coordinator.endContact(control, at: CGPoint(x: 20, y: 22))
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: 20, y: 22))
         XCTAssertEqual(selected, items.last?.tool)
 
         control.setEnabled(false, forSegmentAt: 0)
-        coordinator.beginContact(control, at: CGPoint(x: control.bounds.maxX - 20, y: 22))
-        coordinator.endContact(control, at: CGPoint(x: control.bounds.maxX - 20, y: 22))
+        coordinator.beginContact(control, touch: touch, at: CGPoint(x: control.bounds.maxX - 20, y: 22))
+        coordinator.endContact(control, touch: touch, at: CGPoint(x: control.bounds.maxX - 20, y: 22))
         XCTAssertEqual(selected, items.last?.tool)
     }
 
