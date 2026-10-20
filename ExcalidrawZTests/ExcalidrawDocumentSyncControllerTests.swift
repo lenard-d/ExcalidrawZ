@@ -261,6 +261,71 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testLibraryOlderAppStateWriteCannotOverwriteNewerCompletedScene() async throws {
+        try await assertOlderLibraryAppStateCannotOverwriteNewerScene(capturedTarget: false)
+    }
+
+    @MainActor
+    func testLibraryOlderCapturedAppStateWriteCannotOverwriteNewerCompletedScene() async throws {
+        try await assertOlderLibraryAppStateCannotOverwriteNewerScene(capturedTarget: true)
+    }
+
+    @MainActor
+    private func assertOlderLibraryAppStateCannotOverwriteNewerScene(capturedTarget: Bool) async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let controller = fixture.core.documentSyncController
+        var errors: [NSError] = []
+        fixture.core.publishError = { errors.append($0 as NSError) }
+        try await fixture.setScene(1)
+        let initial = Task { try await fixture.sendFullScene() }
+        fixture.cancelOnClose(initial)
+        try await boundedSaveTestValue(initial)
+
+        let owner = try XCTUnwrap(fixture.state.currentActiveFile)
+        let target = try XCTUnwrap(fixture.state.capturedCanvasSaveTarget(for: owner))
+        let control = LibrarySaveControl(phase: .beforeStorage)
+        addTeardownBlock { await control.release() }
+        try await fixture.install(control)
+        try await fixture.evaluate("window.scene.appState.gridSize = 20")
+        try await fixture.recordDirtyAppState()
+        let old = Task {
+            if capturedTarget {
+                await controller.flushPendingDirtySnapshotToCapturedTarget(
+                    reason: "sceneBackground", expectedFileID: owner.id, target: target
+                )
+            } else {
+                await controller.flushPendingDirtySnapshot(reason: "sceneBackground")
+            }
+        }
+        fixture.cancelOnClose(old)
+        try await control.waitUntilPaused()
+        XCTAssertTrue(controller.hasPendingDirtySnapshot)
+
+        try await fixture.setScene(2)
+        try await fixture.evaluate("window.scene.appState.gridSize = 40")
+        let latest = Task { try await fixture.sendFullScene() }
+        fixture.cancelOnClose(latest)
+        try await boundedSaveTestValue(latest)
+        let confirm = Task { await controller.flushPendingDirtySnapshot(reason: "confirmLatest", force: true) }
+        fixture.cancelOnClose(confirm)
+        try await boundedSaveTestValue(confirm)
+        let newestDisk = try await fixture.libraryDocument()
+        XCTAssertEqual((newestDisk["elements"] as? [[String: Any]])?.first?["id"] as? String, "revision-2")
+        XCTAssertEqual((newestDisk["appState"] as? [String: Any])?["gridSize"] as? Int, 40)
+        XCTAssertFalse(controller.hasPendingDirtySnapshot)
+
+        await control.release()
+        try await boundedSaveTestValue(old)
+        let resumed = await control.resumedAfterRelease
+        XCTAssertTrue(resumed, "The old metadata call must resume after explicit release")
+        XCTAssertTrue(errors.isEmpty, "A superseded metadata write must not report a save failure")
+        let finalDisk = try await fixture.libraryDocument()
+        XCTAssertEqual(finalDisk as NSDictionary, newestDisk as NSDictionary)
+        XCTAssertFalse(controller.hasPendingDirtySnapshot)
+    }
+
+    @MainActor
     func testLibrarySwitchKeepsOriginalOwnerUntilHeldSaveFinishes() async throws {
         let fixture = try await CanvasControllerFixture.open(library: true)
         addTeardownBlock { await fixture.close() }
@@ -633,7 +698,25 @@ private final class CanvasControllerFixture {
         await core.documentSyncController.save(message, admission: admission)
     }
 
+    func recordDirtyAppState() async throws {
+        let currentScene = try await scene()
+        let json = try JSONSerialization.data(withJSONObject: [
+            "revision": try await integer("window.sceneRevision"),
+            "appStateDirty": true,
+            "appState": try XCTUnwrap(currentScene["appState"])
+        ])
+        let metadata = try JSONDecoder().decode(ExcalidrawCore.StateChangedMetadata.self, from: json)
+        let message = ExcalidrawCore.StateChangedMessageData(state: nil, fileData: nil, metadata: metadata)
+        let admission = try XCTUnwrap(core.documentSyncController.admitStateChanged(message))
+        await core.documentSyncController.save(message, admission: admission)
+    }
+
     func libraryElementIDs() async throws -> [String] {
+        let object = try await libraryDocument()
+        return try XCTUnwrap(object["elements"] as? [[String: Any]]).compactMap { $0["id"] as? String }
+    }
+
+    func libraryDocument() async throws -> [String: Any] {
         let id = try XCTUnwrap(libraryFile?.objectID)
         let context = PersistenceController.shared.newTaskContext()
         let path = try await context.perform {
@@ -642,7 +725,7 @@ private final class CanvasControllerFixture {
         }
         let data = try await LocalStorageManager().loadContent(relativePath: path)
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        return try XCTUnwrap(object["elements"] as? [[String: Any]]).compactMap { $0["id"] as? String }
+        return object
     }
 
     func evaluate(_ script: String) async throws {
