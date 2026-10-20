@@ -305,6 +305,146 @@ final class PageModeUITests: XCTestCase {
         // before supplying a drag route. This test does not claim a resize passed.
     }
 
+    func testSyntheticPageNativeResizeAndUndo() throws {
+        let app = try openSyntheticDrawing()
+        try selectTool("Selection", in: app)
+        try openPages(in: app)
+        let add = app.buttons["pages.add"].firstMatch
+        try requireHittable(add, in: app, step: "Create a fresh page for native resize")
+        add.tap()
+        try selectPage("Page 1", in: app)
+        try setLayout("Grid", in: app)
+        try requireObservedResizeAnchor(in: app, overview: false)
+
+        try selectTool("Diamond", in: app)
+        try drag(from: CGPoint(x: 700, y: 400), to: CGPoint(x: 800, y: 500), in: app)
+        try selectTool("Selection", in: app)
+        try selectPage("Page 1", in: app)
+
+        for layout in ["Grid", "Ruled"] {
+            try setLayout(layout, in: app)
+            try requireObservedResizeAnchor(in: app, overview: false)
+            let header = pageHeader("Page 1", in: app).frame
+            let right = app.buttons["pages.context.add"].firstMatch.frame.maxX
+            capture(app, step: "\(layout) before proportional corner resize, retain the Diamond")
+
+            // Observed normal selected-frame NE handle, pages-resize4ca-grid40.png.
+            try drag(from: CGPoint(x: 1148, y: 106), to: CGPoint(x: 1078, y: 206), in: app)
+            try waitForResize(in: app, step: "\(layout) proportional corner moved") {
+                self.pageHeader("Page 1", in: app).frame.minY > header.minY + 50 &&
+                    app.buttons["pages.context.add"].firstMatch.frame.maxX < right - 40
+            }
+            let heightChange = pageHeader("Page 1", in: app).frame.minY - header.minY
+            let widthChange = right - app.buttons["pages.context.add"].firstMatch.frame.maxX
+            XCTAssertEqual(widthChange / heightChange, 595.0 / 842.0, accuracy: 0.04)
+            capture(app, step: "\(layout) proportional resize, inspect full paper and unchanged Diamond")
+            try undoResize(in: app)
+            try requireObservedResizeAnchor(in: app, overview: false)
+
+            // The right-side handle is visible at the page's mid-height in that capture.
+            try drag(from: CGPoint(x: 1148, y: 555), to: CGPoint(x: 1048, y: 555), in: app)
+            try waitForResize(in: app, step: "\(layout) free right edge moved") {
+                abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 100)) < 4
+            }
+            XCTAssertEqual(pageHeader("Page 1", in: app).frame.minY, header.minY, accuracy: 3)
+            capture(app, step: "\(layout) free width resize, inspect full paper and unchanged height and ink")
+            try drag(from: CGPoint(x: 1048, y: 555), to: CGPoint(x: 1088, y: 555), in: app)
+            try waitForResize(in: app, step: "\(layout) repeated free resize moved") {
+                abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 60)) < 4
+            }
+            capture(app, step: "\(layout) repeated resize after pointer release, inspect paper and ink")
+            try undoResize(in: app)
+            try waitForResize(in: app, step: "\(layout) undo repeated edge resize") {
+                abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 100)) < 4
+            }
+            try undoResize(in: app)
+            try requireObservedResizeAnchor(in: app, overview: false)
+            try assertLayout(layout, in: app)
+            capture(app, step: "\(layout) undo restores original paper extent and Diamond")
+        }
+
+        try addPage("Add right", in: app)
+        try openPages(in: app)
+        let overview = app.buttons["Canvas"].firstMatch
+        try requireHittable(overview, in: app, step: "Overview for actual top-edge clearance")
+        overview.tap()
+        try selectPage("Page 1", in: app)
+        try requireObservedResizeAnchor(in: app, overview: true)
+        let headerY = pageHeader("Page 1", in: app).frame.minY
+        let right = app.buttons["pages.context.add"].firstMatch.frame.maxX
+        // Observed overview top-side handle, pages-resize4ca-overview64.png.
+        try drag(from: CGPoint(x: 604, y: 232), to: CGPoint(x: 604, y: 272), in: app)
+        try waitForResize(in: app, step: "Overview top handle resizes instead of opening a control") {
+            abs(self.pageHeader("Page 1", in: app).frame.minY - (headerY + 40)) < 4
+        }
+        XCTAssertEqual(app.buttons["pages.context.add"].firstMatch.frame.maxX, right, accuracy: 3)
+        try drag(from: CGPoint(x: 604, y: 272), to: CGPoint(x: 604, y: 252), in: app)
+        try waitForResize(in: app, step: "Overview repeated top resize") {
+            abs(self.pageHeader("Page 1", in: app).frame.minY - (headerY + 20)) < 4
+        }
+        capture(app, step: "Overview repeated free top resize, controls remain separate from handle")
+        try undoResize(in: app)
+        try waitForResize(in: app, step: "Overview first top-edge undo") {
+            abs(self.pageHeader("Page 1", in: app).frame.minY - (headerY + 40)) < 4
+        }
+        try undoResize(in: app)
+        try requireObservedResizeAnchor(in: app, overview: true)
+        capture(app, step: "Overview undo restores page and paper; second page stays unchanged")
+    }
+
+    private func requireObservedResizeAnchor(in app: XCUIApplication, overview: Bool) throws {
+        try assertContext(in: app, page: "Page 1", step: overview ? "Overview resize anchor" : "Normal resize anchor")
+        let expectedHeader = overview ? CGPoint(x: 378, y: 214) : CGPoint(x: 513, y: 89)
+        let expectedRight: CGFloat = overview ? 805.5 : 1118.5
+        let header = pageHeader("Page 1", in: app).frame
+        let controls = [app.buttons["pages.context.layout"].firstMatch.frame,
+                        app.buttons["pages.context.add"].firstMatch.frame]
+        guard abs(header.minX - expectedHeader.x) < 3,
+              abs(header.minY - expectedHeader.y) < 3,
+              abs(controls[1].maxX - expectedRight) < 3,
+              abs(app.frame.width - 1366) < 1, abs(app.frame.height - 1024) < 1 else {
+            capture(app, step: "STOP: selected-page geometry differs from inspected resize captures")
+            throw NSError(domain: "PageModeUITests", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "Inspect current selected-frame handles before changing resize coordinates."
+            ])
+        }
+        let topCenter = overview ? CGPoint(x: 604, y: 232) : CGPoint(x: 828.5, y: 106)
+        let topRight = overview ? CGPoint(x: 834, y: 232) : CGPoint(x: 1148, y: 106)
+        for center in [topCenter, topRight] {
+            let touchArea = CGRect(x: center.x - 14, y: center.y - 14, width: 28, height: 28)
+            for control in controls { XCTAssertFalse(control.intersects(touchArea)) }
+        }
+    }
+
+    private func drag(from start: CGPoint, to end: CGPoint, in app: XCUIApplication) throws {
+        let canvas = app.webViews.firstMatch
+        try requireHittable(canvas, in: app, step: "Public canvas for observed resize geometry")
+        guard canvas.frame.contains(start), canvas.frame.contains(end) else {
+            capture(app, step: "STOP: observed drag is outside the current canvas")
+            throw NSError(domain: "PageModeUITests", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "The current canvas does not contain the inspected drag route."
+            ])
+        }
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: start.x, dy: start.y))
+            .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: end.x, dy: end.y)),
+                   withVelocity: .slow, thenHoldForDuration: 0.2)
+    }
+
+    private func undoResize(in app: XCUIApplication) throws {
+        let undo = app.buttons["toolbar.undo"].firstMatch
+        try requireHittable(undo, in: app, step: "Undo the last public resize")
+        undo.tap()
+    }
+
+    private func waitForResize(in app: XCUIApplication, step: String, condition: @escaping () -> Bool) throws {
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+        guard XCTWaiter.wait(for: [changed], timeout: 5) == .completed else {
+            capture(app, step: "STOP: \(step)")
+            throw NSError(domain: "PageModeUITests", code: 7, userInfo: [NSLocalizedDescriptionKey: step])
+        }
+    }
+
     private func openSyntheticDrawing() throws -> XCUIApplication {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()
