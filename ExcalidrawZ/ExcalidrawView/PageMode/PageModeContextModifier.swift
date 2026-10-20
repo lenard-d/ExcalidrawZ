@@ -18,6 +18,7 @@ struct PageModeContextModifier: ViewModifier {
 @MainActor
 private struct PageModeContextHost: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.excalidrawNativeViewportInsets) private var nativeViewportInsets
     @EnvironmentObject private var toolState: ToolState
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var lockedContentState: LockedContentStateStore
@@ -31,7 +32,11 @@ private struct PageModeContextHost: View {
             if let controller, available {
                 PageModeContextActions(controller: controller, selectedIDs: core.selectedElementIDs,
                     scroll: CGPoint(x: core.cameraState.scrollX, y: core.cameraState.scrollY),
-                    zoom: core.cameraState.zoom, viewport: geometry.size, refresh: refresh)
+                    zoom: core.cameraState.zoom,
+                    viewport: CGRect(x: nativeViewportInsets.left, y: nativeViewportInsets.top,
+                        width: geometry.size.width - nativeViewportInsets.left - nativeViewportInsets.right,
+                        height: geometry.size.height - nativeViewportInsets.top - nativeViewportInsets.bottom),
+                    refresh: refresh)
             }
         }
         .task { refresh() }
@@ -103,7 +108,7 @@ private struct PageModeContextActions: View {
     let selectedIDs: [String]
     let scroll: CGPoint
     let zoom: Double
-    let viewport: CGSize
+    let viewport: CGRect
     let refresh: () -> Void
     @State private var controlsHeight: CGFloat = 52
 
