@@ -77,6 +77,13 @@ struct ExcalidrawToolbar: View {
 
         leadingTollsContent()
 #if os(iOS)
+            .apply { button in
+                if usesCombinedToolsMenu {
+                    button.buttonStyle(.plain)
+                } else {
+                    button
+                }
+            }
             .excalidrawToolbarSurface(.circle, padded: !usesCombinedToolsMenu)
 #endif
         ExcalidrawToolbarToolContainer { sizeClass in
@@ -129,6 +136,7 @@ struct ExcalidrawToolbar: View {
                     overflowItems: sizeClass == .dense ? presentation.items : pickerItems.secondary,
                     usesPrincipalLabel: true
                 )
+                .buttonStyle(.plain)
                 .excalidrawToolbarSurface(.circle, padded: false)
             }
 #endif
