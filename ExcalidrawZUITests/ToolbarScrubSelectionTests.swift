@@ -179,6 +179,26 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         capture(app, name: "Settings ellipsis retains Style and modes without overflow tools")
     }
 
+    func testDrawingSettingsRouteCapture() {
+        let app = openSyntheticDrawing()
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 15))
+        menu.tap()
+        let drawingSettings = app.buttons["toolbar.drawingSettings"].firstMatch
+        scrollMenuUntilVisible(drawingSettings, in: app)
+        guard drawingSettings.isHittable else {
+            captureEditorPhase(app, name: "Drawing settings action unavailable")
+            XCTFail("The settings menu must expose Drawing settings")
+            return
+        }
+        drawingSettings.tap()
+        let addTool = app.buttons["settings.toolbar.addTool"].firstMatch
+        let settingsOpened = addTool.waitForExistence(timeout: 5)
+        captureEditorPhase(app, name: "Drawing settings route, capture before any configuration change")
+        XCTAssertTrue(settingsOpened)
+        // Root inspects this route before adding configuration or dismissal assertions.
+    }
+
     func testPenModeAndKeepToolActiveRemainIndependent() {
         let app = openSyntheticDrawing()
         let menu = app.buttons["toolbar.moreTools"].firstMatch
