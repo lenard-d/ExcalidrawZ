@@ -41,6 +41,42 @@ final class PageModeUITests: XCTestCase {
         capture(app, step: "Tagged page after writing, inspect video for blue border during contact")
     }
 
+    func testExploreSyntheticPageDuplicateAndReopenRoute() throws {
+        let app = try openSyntheticDrawing()
+        try openPages(in: app)
+        let add = app.buttons["pages.add"].firstMatch
+        try requireHittable(add, in: app, step: "Create the synthetic page to duplicate")
+        add.tap()
+        try selectTool("Selection", in: app)
+        try selectPage("Page 1", in: app)
+        try setLayout("Grid", in: app)
+
+        let canvas = app.webViews.firstMatch
+        try selectTool("Diamond", in: app)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.45))
+            .press(forDuration: 0.1,
+                   thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.60)))
+        try selectTool("Selection", in: app)
+        try selectPage("Page 1", in: app)
+        capture(app, step: "Original grid page and ink before public Duplicate")
+        let duplicate = canvas.buttons["Duplicate"].firstMatch
+        try requireHittable(duplicate, in: app, step: "Observed public Duplicate action for selected page")
+        duplicate.tap()
+
+        try openPages(in: app)
+        let copy = app.buttons["pages.open.1"].firstMatch
+        try requireHittable(copy, in: app, step: "Pages recognizes the duplicated page")
+        XCTAssertTrue(app.buttons["pages.open.0"].exists)
+        XCTAssertFalse(app.buttons["pages.open.2"].exists)
+        capture(app, step: "Original and duplicate in ordered Pages list")
+        copy.tap()
+        try assertLayout("Grid", in: app)
+        capture(app, step: "Duplicated grid page, inspect retained ink")
+
+        // Stop here. Root must identify this drawing's actual row before a reopen or PDF save.
+        capture(app, step: "STOP for route inspection: synthetic drawing filename and reopen controls")
+    }
+
     func testSyntheticPageContextLayoutsAndBothAddDirections() throws {
         let app = try openSyntheticDrawing()
         let canvas = app.webViews.firstMatch
