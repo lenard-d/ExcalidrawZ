@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 @testable import ExcalidrawZ
 
 final class PageModeContextPlacementTests: XCTestCase {
@@ -8,17 +9,17 @@ final class PageModeContextPlacementTests: XCTestCase {
     func testControlsFollowFrameHeaderThroughPanAndZoom() throws {
         let page = PageModePage(id: "page", title: "Notes", width: 595, height: 842, locked: false, x: 20, y: 200)
         let initial = try XCTUnwrap(PageModeContextPlacement.origin(page: page, scroll: .zero, zoom: 1, viewport: viewport, controls: controls))
-        XCTAssertEqual(initial, CGPoint(x: 177.5, y: 148))
+        XCTAssertEqual(initial, CGPoint(x: 311, y: 148))
         let panned = try XCTUnwrap(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: 10, y: -50), zoom: 0.5, viewport: viewport, controls: controls))
-        XCTAssertEqual(panned, CGPoint(x: 23.75, y: 23))
+        XCTAssertEqual(panned, CGPoint(x: 8.5, y: 23))
     }
 
     func testClippingStaysWithinVisibleHeaderAndOffscreenHeaderHidesControls() {
         let page = PageModePage(id: "page", title: "Notes", width: 595, height: 842, locked: false, x: 800, y: 200)
         XCTAssertEqual(PageModeContextPlacement.origin(page: page, scroll: .zero, zoom: 1, viewport: viewport, controls: controls), CGPoint(x: 712, y: 148))
-        XCTAssertEqual(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: -800, y: -200), zoom: 1, viewport: viewport, controls: controls), CGPoint(x: 157.5, y: 8))
+        XCTAssertEqual(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: -800, y: -200), zoom: 1, viewport: viewport, controls: controls), CGPoint(x: 291, y: 8))
         XCTAssertNil(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: -800, y: 700), zoom: 1, viewport: viewport, controls: controls))
-        XCTAssertEqual(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: -300, y: 0), zoom: 1, viewport: viewport, controls: controls), CGPoint(x: 610, y: 148))
+        XCTAssertEqual(PageModeContextPlacement.origin(page: page, scroll: CGPoint(x: -300, y: 0), zoom: 1, viewport: viewport, controls: controls), CGPoint(x: 712, y: 148))
     }
 
     func testInvalidCameraAndNarrowHeaderHaveNoDetachedControls() {
@@ -48,5 +49,18 @@ final class PageModeContextPlacementTests: XCTestCase {
             zoom: 1, viewport: visible, controls: controls))
         XCTAssertTrue(visible.contains(CGRect(origin: origin, size: controls)))
         XCTAssertEqual(origin.x, 312)
+    }
+
+    func testRightAlignedTouchTargetsStayClearOfCornerHandle() throws {
+        let page = PageModePage(id: "page", title: "Notes", width: 595, height: 842, locked: false, x: 200, y: 200)
+        let compact = CGSize(width: 220, height: 44)
+        let origin = try XCTUnwrap(PageModeContextPlacement.origin(page: page, scroll: .zero,
+            zoom: 1, viewport: viewport, controls: compact))
+        let row = CGRect(origin: origin, size: compact)
+        let touchHandle = CGRect(x: 795 - 14, y: 200 - 14, width: 28, height: 28)
+        XCTAssertFalse(row.intersects(touchHandle))
+        XCTAssertGreaterThan(row.midX, 200 + 595 / 2)
+        XCTAssertEqual(row.maxX, 771)
+        XCTAssertTrue(viewport.contains(row))
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 enum PageModeContextPlacement {
     /// Keeps controls at the visible frame header. Offscreen headers have no floating controls.
@@ -17,7 +18,8 @@ enum PageModeContextPlacement {
               viewport.width >= controls.width + 16,
               top >= viewport.minY, top < viewport.maxY - controls.height - 8 else { return nil }
         let rowTop = top >= viewport.minY + controls.height + 16 ? top - controls.height - 8 : top + 8
-        let centered = (max(viewport.minX, left) + min(viewport.maxX, right) - controls.width) / 2
-        return CGPoint(x: min(max(viewport.minX + 8, centered), viewport.maxX - controls.width - 8), y: rowTop)
+        // Keep the touch area clear of the frame's 28-point corner handle.
+        let headerRight = min(viewport.maxX - 8, right - 24)
+        return CGPoint(x: max(viewport.minX + 8, headerRight - controls.width), y: rowTop)
     }
 }
