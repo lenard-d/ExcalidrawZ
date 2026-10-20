@@ -74,7 +74,7 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
             }
         } label: {
             if usesPrincipalLabel {
-                menuLabel.labelStyle(.iconOnly).frame(width: 32, height: 32)
+                menuLabel.labelStyle(.iconOnly).frame(width: 44, height: 44).contentShape(Circle())
             } else {
                 menuLabel
             }
