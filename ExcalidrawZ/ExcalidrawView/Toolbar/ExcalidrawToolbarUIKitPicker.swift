@@ -67,8 +67,8 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
             let scrub = UILongPressGestureRecognizer(target: self, action: #selector(handleScrub(_:)))
             scrub.minimumPressDuration = 0
             scrub.allowableMovement = .greatestFiniteMagnitude
-            scrub.delaysTouchesBegan = true
-            scrub.cancelsTouchesInView = true
+            scrub.delaysTouchesBegan = false
+            scrub.cancelsTouchesInView = false
             control.addGestureRecognizer(scrub)
             return control
         }
