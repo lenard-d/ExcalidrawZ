@@ -158,6 +158,7 @@ struct ExcalidrawCanvasView: View {
             .modifier(MediaItemSyncModifier())
             .modifier(MathImageEditSheetViewModifier(coordinator: excalidrawCore, onError: onError))
             .environmentObject(excalidrawCore)
+            .modifier(PageModeContextModifier(core: excalidrawCore, isEnabled: type == .normal && interactionEnabled))
 #if os(macOS)
             .onWindowEvent(.didBecomeKey) { _ in
                 applyColorMode()

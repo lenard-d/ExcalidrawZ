@@ -5,6 +5,7 @@ struct PageModeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject var controller: PageModeController
     @State private var paper: PageModePaper = .a4Portrait
+    @State private var layout: PageModeLayout = .blank
     @State private var renamedPage: PageModePage?
     @State private var isRenamePresented = false
     @State private var pageTitle = ""
@@ -34,7 +35,7 @@ struct PageModeSheet: View {
                             pageRow(page, index: index)
                         }
                         if controller.pages.isEmpty {
-                            Text(String(localized: "Add a blank page to start your notes. Your existing drawing stays in place."))
+                            Text(String(localized: "Add a page to start your notes. Your existing drawing stays in place."))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -44,17 +45,14 @@ struct PageModeSheet: View {
                                 Text(paper.title).tag(paper)
                             }
                         }
+                        Picker(String(localized: "Layout"), selection: $layout) {
+                            ForEach(PageModeLayout.allCases) { layout in
+                                Text(layout.title).tag(layout)
+                            }
+                        }
                         Button(String(localized: "Add page")) {
                             Task {
-                                let command = PageModeCommand(
-                                    action: .add,
-                                    title: String(localized: "Page \(controller.pages.count + 1)"),
-                                    width: paper.width,
-                                    height: paper.height
-                                )
-                                if await controller.perform(command), let page = controller.pages.last {
-                                    open(.init(action: .open, pageID: page.id))
-                                }
+                                if await controller.createPage(paper: paper, layout: layout) { dismiss() }
                             }
                         }
                         .accessibilityIdentifier("pages.add")
@@ -108,7 +106,7 @@ struct PageModeSheet: View {
                 Task { await controller.perform(.init(action: .remove, pageID: page.id)) }
             }
         } message: {
-            Text(String(localized: "All drawing content stays on the canvas. You can undo this change in the editor."))
+            Text(String(localized: "Your notes stay on the canvas. The page boundary and its guide lines are removed. You can undo this change in the editor."))
         }
         .fileExporter(
             isPresented: $isExportPresented,
@@ -136,6 +134,13 @@ struct PageModeSheet: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("pages.open.\(index)")
             Menu {
+                Menu(String(localized: "Layout")) {
+                    ForEach(PageModeLayout.allCases) { layout in
+                        Button(layout.title) {
+                            Task { await controller.perform(.init(action: .setLayout, pageID: page.id, layout: layout)) }
+                        }
+                    }
+                }
                 Button(String(localized: "Rename page")) {
                     pageTitle = page.title
                     renamedPage = page

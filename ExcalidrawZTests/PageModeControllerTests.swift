@@ -40,25 +40,89 @@ final class PageModeControllerTests: XCTestCase {
 
     @MainActor
     func testSecondActionCannotOverlapPendingSceneCommand() async throws {
-        let entered = expectation(description: "Scene command entered")
-        var resume: CheckedContinuation<String, Error>?
+        let gate = SaveTestGate()
         var calls = 0
         let controller = PageModeController(execute: { _ in
             calls += 1
-            return try await withCheckedThrowingContinuation { continuation in
-                resume = continuation
-                entered.fulfill()
-            }
+            try await gate.pause()
+            return #"{"pages":[],"openedPageID":null}"#
         }, render: { _, _ in Data() }, isCurrent: { true })
         let first = Task { await controller.perform(.init(action: .list)) }
-        await fulfillment(of: [entered], timeout: 1)
-        let second = await controller.perform(.init(action: .add, width: 595, height: 842))
-        resume?.resume(returning: #"{"pages":[],"openedPageID":null}"#)
-        let succeeded = await first.value
-        XCTAssertFalse(second)
+        let second: Task<Bool, Never>
+        do {
+            try await gate.waitUntilPaused()
+            second = Task { await controller.perform(.init(action: .add, width: 595, height: 842)) }
+            do {
+                let overlapped = try await boundedSaveTestValue(second, timeout: .milliseconds(100))
+                XCTAssertFalse(overlapped)
+            } catch {
+                second.cancel()
+                await gate.release()
+                _ = try await boundedSaveTestValue(second)
+                throw error
+            }
+        } catch {
+            first.cancel()
+            await gate.release()
+            _ = try await boundedSaveTestValue(first)
+            throw error
+        }
+        await gate.release()
+        let succeeded = try await boundedSaveTestValue(first)
         XCTAssertTrue(succeeded)
         XCTAssertEqual(calls, 1)
         XCTAssertFalse(controller.isBusy)
+    }
+
+    @MainActor
+    func testCreateOpensReturnedIDRatherThanLastRowAndInheritsSelectedPageLayout() async {
+        var commands: [PageModeCommand] = []
+        let result = #"{"pages":[{"id":"new","title":"New","width":842,"height":595,"locked":false,"layout":"ruled"},{"id":"last","title":"Last","width":595,"height":842,"locked":false}],"openedPageID":"new"}"#
+        let controller = PageModeController(execute: { command in
+            commands.append(command)
+            return result
+        }, render: { _, _ in Data() }, isCurrent: { true })
+        let page = PageModePage(id: "old", title: "Old", width: 842, height: 595, locked: false, layout: .ruled)
+        let success = await controller.createPage(after: page, placement: .right)
+        XCTAssertTrue(success)
+        XCTAssertEqual(commands.map(\.action), [.add, .open])
+        XCTAssertEqual(commands.last?.pageID, "new")
+        XCTAssertEqual(commands.first?.width, 842)
+        XCTAssertEqual(commands.first?.height, 595)
+        XCTAssertEqual(commands.first?.layout, .ruled)
+        XCTAssertEqual(commands.first?.pageID, "old")
+        XCTAssertEqual(commands.first?.placement, .right)
+    }
+
+    @MainActor
+    func testCameraFailureKeepsCreatedPageAndVisibleErrorWithoutRetryingAdd() async {
+        var calls = 0
+        let controller = PageModeController(execute: { command in
+            calls += 1
+            if command.action == .open { throw PageModeError.failedAction }
+            return #"{"pages":[{"id":"new","title":"New","width":595,"height":842,"locked":false}],"openedPageID":"new"}"#
+        }, render: { _, _ in Data() }, isCurrent: { true })
+        let success = await controller.createPage(paper: .a4Portrait, layout: .grid)
+        XCTAssertFalse(success)
+        XCTAssertEqual(controller.pages.map(\.id), ["new"])
+        XCTAssertNotNil(controller.errorMessage)
+        XCTAssertEqual(calls, 2)
+    }
+
+    @MainActor
+    func testOwnerChangeAfterAddPreventsCameraReadAndDropsPageData() async {
+        var current = true
+        var calls = 0
+        let controller = PageModeController(execute: { _ in
+            calls += 1
+            current = false
+            return #"{"pages":[{"id":"new","title":"New","width":595,"height":842,"locked":false}],"openedPageID":"new"}"#
+        }, render: { _, _ in Data() }, isCurrent: { current })
+        let success = await controller.createPage(paper: .a4Portrait, layout: .blank)
+        XCTAssertFalse(success)
+        XCTAssertEqual(calls, 1)
+        XCTAssertTrue(controller.pages.isEmpty)
+        XCTAssertFalse(controller.isValid)
     }
 
     @MainActor
