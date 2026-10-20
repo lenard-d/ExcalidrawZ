@@ -25,7 +25,9 @@ final class ToolbarDirectToolConfigurationTests: XCTestCase {
         let presentation = ExcalidrawToolbarToolPresentation(order: restored)
         XCTAssertEqual(restored.directToolCount, 10)
         XCTAssertEqual(presentation.configuredDirectItems.map(\.tool), originalDirect + [.frame])
-        XCTAssertFalse(presentation.configuredOverflowItems.contains { $0.tool == .frame })
+        XCTAssertEqual(presentation.configuredOverflowItems.map(\.tool), [
+            .eraser, .laser, .lasso, .hand, .webEmbed, .magicFrame,
+        ])
         XCTAssertEqual(restored.tool(forShortcutNumber: 0), .frame)
         XCTAssertEqual(presentation.configuredDirectItems.last?.shortcutLabel, "0")
         XCTAssertEqual(restored, order)
@@ -65,6 +67,30 @@ final class ToolbarDirectToolConfigurationTests: XCTestCase {
         XCTAssertEqual(presentation.pickerItems(for: .expanded).primary.map(\.tool), order.tools)
         XCTAssertTrue(presentation.pickerItems(for: .expanded).secondary.isEmpty)
         XCTAssertEqual(order.directToolCount, 11)
+    }
+
+    func testReorderingAcrossDirectBoundaryPreservesCountAndRemainingOrder() {
+        var order = ExcalidrawToolbarToolOrder()
+        order.addDirectTool(.frame)
+        order.move(from: IndexSet(integer: 8), to: 11)
+        var restored = ExcalidrawToolbarToolOrder(storedData: order.storedData)
+        XCTAssertEqual(restored.directToolCount, 10)
+        XCTAssertEqual(restored.tools, [
+            .cursor, .rectangle, .diamond, .ellipse, .arrow, .line, .freedraw, .text,
+            .frame, .eraser, .image, .laser, .lasso, .hand, .webEmbed, .magicFrame,
+        ])
+        XCTAssertEqual(ExcalidrawToolbarToolPresentation(order: restored)
+            .configuredOverflowItems.first?.tool, .image)
+
+        restored.move(from: IndexSet(integer: 15), to: 0)
+        let final = ExcalidrawToolbarToolOrder(storedData: restored.storedData)
+        XCTAssertEqual(final.directToolCount, 10)
+        XCTAssertEqual(final.tools, [
+            .magicFrame, .cursor, .rectangle, .diamond, .ellipse, .arrow, .line,
+            .freedraw, .text, .frame, .eraser, .image, .laser, .lasso, .hand, .webEmbed,
+        ])
+        XCTAssertEqual(ExcalidrawToolbarToolPresentation(order: final)
+            .configuredDirectItems.first?.tool, .magicFrame)
     }
 
     func testEnvelopePreservesOrderWithMissingOrInvalidCount() {
