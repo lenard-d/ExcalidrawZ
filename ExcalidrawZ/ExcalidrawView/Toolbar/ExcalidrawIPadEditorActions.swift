@@ -123,6 +123,7 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
             }
         }
         .accessibilityLabel("Zoom")
+        .accessibilityValue(Text(core.cameraState.zoom, format: .percent.precision(.fractionLength(0))))
         .accessibilityIdentifier("toolbar.zoom")
     }
 

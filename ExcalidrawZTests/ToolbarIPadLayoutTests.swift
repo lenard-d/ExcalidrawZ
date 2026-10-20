@@ -23,6 +23,17 @@ final class ToolbarIPadLayoutTests: XCTestCase {
         XCTAssertFalse(usesNativeControls(width: 0))
     }
 
+    func testCollaborationAndNoninteractiveCanvasesKeepWebControls() {
+        XCTAssertFalse(ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
+            isPad: true, horizontalSizeClass: .regular, containerWidth: 1194,
+            isNormalEditor: false
+        ))
+        XCTAssertFalse(ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
+            isPad: true, horizontalSizeClass: .regular, containerWidth: 1194,
+            isInteractionEnabled: false
+        ))
+    }
+
     private func usesNativeControls(width: CGFloat) -> Bool {
         ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
             isPad: true, horizontalSizeClass: .regular, containerWidth: width
