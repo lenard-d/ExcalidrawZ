@@ -19,11 +19,19 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
             toolState.toggleActionsMenu()
         } label: {
             Label("Style", systemImage: "paintbrush.pointed")
+                .labelStyle(.iconOnly)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .fixedSize()
         .accessibilityIdentifier("toolbar.style")
         .accessibilityAddTraits(toolState.isActionsMenuPresneted ? .isSelected : [])
 
-        ShareToolbarButton()
+        ShareToolbarButton(usesNativeIPadControlSize: true)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .fixedSize()
             .accessibilityIdentifier("toolbar.share")
 
         ExcalidrawToolbarToolContainer { sizeClass in
@@ -85,6 +93,9 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
                     undoActions
                 } label: {
                     Label(.localizable(.generalButtonUndo), systemImage: "arrow.uturn.backward")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 } primaryAction: {
                     run { try await core.performUndo() }
                 }
@@ -93,9 +104,15 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
                     undoActions
                 } label: {
                     Label(.localizable(.generalButtonUndo), systemImage: "arrow.uturn.backward")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
             }
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .fixedSize()
         .disabled(!core.canUndo && !core.canRedo)
         .accessibilityIdentifier("toolbar.undo")
     }
