@@ -196,7 +196,14 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let settingsOpened = addTool.waitForExistence(timeout: 5)
         captureEditorPhase(app, name: "Drawing settings route, capture before any configuration change")
         XCTAssertTrue(settingsOpened)
-        // Root inspects this route before adding configuration or dismissal assertions.
+
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.50)).tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: addTool
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        XCTAssertTrue(app.segmentedControls["toolbar.toolPicker"].firstMatch.isHittable)
+        captureEditorPhase(app, name: "Drawing settings dismissed by the observed outside blank region")
     }
 
     func testPenModeAndKeepToolActiveRemainIndependent() {
