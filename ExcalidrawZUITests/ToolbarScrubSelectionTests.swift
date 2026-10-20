@@ -219,27 +219,83 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(menu.waitForExistence(timeout: 15))
         menu.tap()
         let zoom = app.buttons["toolbar.zoom"].firstMatch
-        zoom.swipeUp()
-        XCTAssertTrue(zoom.isHittable)
+        revealMenuAction(zoom, in: app)
         zoom.tap()
         let zoom200 = app.buttons["toolbar.zoom.200"].firstMatch
         XCTAssertTrue(zoom200.waitForExistence(timeout: 3))
         zoom200.tap()
         menu.tap()
         XCTAssertTrue(app.buttons["toolbar.zoom"].waitForExistence(timeout: 3))
+        revealMenuAction(zoom, in: app)
         let zoomChanged = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value CONTAINS %@", "200"),
+            predicate: NSPredicate(format: "label CONTAINS %@", "200"),
             object: app.buttons["toolbar.zoom"].firstMatch
         )
         XCTAssertEqual(XCTWaiter.wait(for: [zoomChanged], timeout: 5), .completed)
         let inspector = app.buttons["toolbar.inspector"].firstMatch
-        inspector.swipeUp()
+        revealMenuAction(inspector, in: app)
         inspector.tap()
         let search = app.descendants(matching: .any)["toolbar.inspector.search"].firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 3))
         search.tap()
         capture(app, name: "Search inspector opened through the native secondary menu")
         XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 5))
+    }
+
+    func testStyleHiddenWithoutSelectionStaysHiddenWhenSelectingANewShape() {
+        let app = openSyntheticDrawing()
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let cursor = tool(named: "Selection", in: control)
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        let panel = app.webViews.otherElements.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Selected shape actions,")
+        ).firstMatch
+        XCTAssertFalse(panel.isHittable)
+        let style = app.buttons["toolbar.style"].firstMatch
+        XCTAssertTrue(style.isHittable)
+        // A fresh app starts with Style shown. Hide it before any panel exists.
+        style.tap()
+        captureStylePhase(app, name: "Style off with Selection and no panel")
+
+        let rectangle = tool(named: "Rectangle", in: control)
+        XCTAssertTrue(rectangle.isHittable)
+        rectangle.tap()
+        assertSelection(rectangle, control: control)
+        let canvas = app.webViews.firstMatch
+        drag(in: canvas, from: CGVector(dx: 0.5, dy: 0.4), to: CGVector(dx: 0.7, dy: 0.6))
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)).tap()
+        XCTAssertFalse(panel.isHittable, "Selection must use stored Style state without another Style request")
+        captureStylePhase(app, name: "New shape selected while Style remains off")
+
+        style.tap()
+        let shown = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: panel)
+        XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 5), .completed)
+        captureStylePhase(app, name: "One Style press shows the selected shape panel")
+        style.tap()
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: panel)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
+        captureStylePhase(app, name: "One more Style press hides the selected shape panel")
+    }
+
+    private func revealMenuAction(_ action: XCUIElement, in app: XCUIApplication) {
+        let menu = app.collectionViews.containing(.button, identifier: "toolbar.zoom").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 3))
+        for _ in 0..<4 where !action.isHittable {
+            menu.swipeUp()
+        }
+        XCTAssertTrue(action.isHittable, "The secondary menu must scroll to its command")
+    }
+
+    private func captureStylePhase(_ app: XCUIApplication, name: String) {
+        capture(app, name: name)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "\(name), accessibility tree"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
     }
 
     private func reopenMenuIfNeeded(_ menu: XCUIElement, in app: XCUIApplication) {
