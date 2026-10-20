@@ -26,33 +26,69 @@ final class ToolbarKeyboardCommandTests: XCTestCase {
         XCTAssertEqual(selectedTools, [.ellipse, .arrow, .eraser])
     }
 
+    func testAlternateCommandsUseSecondBankAfterReorderAndReload() throws {
+        var order = ExcalidrawToolbarToolOrder(directToolCount: 6)
+        order.move(from: IndexSet(integer: 3), to: 11)
+        let restored = ExcalidrawToolbarToolOrder(storedData: order.storedData)
+        var selectedTools: [ExcalidrawTool] = []
+        var alternateDispatchCount = 0
+        let webView = makeWebView { key in
+            let tool: ExcalidrawTool?
+            switch key {
+                case .number(let number):
+                    tool = restored.tool(forShortcutNumber: number)
+                case .alternateNumber(let number):
+                    alternateDispatchCount += 1
+                    tool = restored.tool(forShortcutNumber: number, alternate: true)
+                default:
+                    return
+            }
+            if let tool { selectedTools.append(tool) }
+        }
+
+        for input in ["1", "2", "6", "0"] {
+            let command = try numberCommand(input, alternate: true, in: webView)
+            webView.perform(command.action, with: command)
+        }
+        let plain = try numberCommand("0", in: webView)
+        webView.perform(plain.action, with: plain)
+
+        XCTAssertEqual(alternateDispatchCount, 4, "Option+0 is dispatched but has no twentieth tool")
+        XCTAssertEqual(selectedTools, [.ellipse, .lasso, .magicFrame, .laser])
+        XCTAssertEqual(webView.keyCommands?.filter { $0.action == plain.action }.count, 20)
+    }
+
     func testCachedCommandCannotChangeToolsDuringTextEntry() throws {
-        var dispatchCount = 0
-        let webView = makeWebView { _ in dispatchCount += 1 }
-        let command = try numberCommand("4", in: webView)
+        for alternate in [false, true] {
+            var dispatchCount = 0
+            let webView = makeWebView { _ in dispatchCount += 1 }
+            let command = try numberCommand("4", alternate: alternate, in: webView)
 
-        webView.shouldHandleInput = false
+            webView.shouldHandleInput = false
 
-        XCTAssertFalse(webView.canPerformAction(try XCTUnwrap(command.action), withSender: command))
-        XCTAssertFalse(webView.keyCommands?.contains { $0.action == command.action } ?? false)
-        webView.perform(command.action, with: command)
-        XCTAssertEqual(dispatchCount, 0)
+            XCTAssertFalse(webView.canPerformAction(try XCTUnwrap(command.action), withSender: command))
+            XCTAssertFalse(webView.keyCommands?.contains { $0.action == command.action } ?? false)
+            webView.perform(command.action, with: command)
+            XCTAssertEqual(dispatchCount, 0)
 
-        webView.shouldHandleInput = true
-        webView.perform(command.action, with: command)
-        XCTAssertEqual(dispatchCount, 1)
+            webView.shouldHandleInput = true
+            webView.perform(command.action, with: command)
+            XCTAssertEqual(dispatchCount, 1)
+        }
     }
 
     func testCachedCommandCannotChangeToolsWhenCanvasIsInactive() throws {
-        var dispatchCount = 0
-        let webView = makeWebView { _ in dispatchCount += 1 }
-        let command = try numberCommand("4", in: webView)
+        for alternate in [false, true] {
+            var dispatchCount = 0
+            let webView = makeWebView { _ in dispatchCount += 1 }
+            let command = try numberCommand("4", alternate: alternate, in: webView)
 
-        webView.nativeInteractionEnabled = false
+            webView.nativeInteractionEnabled = false
 
-        XCTAssertFalse(webView.canPerformAction(try XCTUnwrap(command.action), withSender: command))
-        webView.perform(command.action, with: command)
-        XCTAssertEqual(dispatchCount, 0)
+            XCTAssertFalse(webView.canPerformAction(try XCTUnwrap(command.action), withSender: command))
+            webView.perform(command.action, with: command)
+            XCTAssertEqual(dispatchCount, 0)
+        }
     }
 
     func testModifiedAndInvalidCommandsDoNotChangeTools() throws {
@@ -61,21 +97,29 @@ final class ToolbarKeyboardCommandTests: XCTestCase {
         let command = try numberCommand("4", in: webView)
         let action = try XCTUnwrap(command.action)
 
-        for modifiers: UIKeyModifierFlags in [.command, .control, .alternate, .shift] {
+        for modifiers: UIKeyModifierFlags in [
+            .command, .control, .shift,
+            [.alternate, .command], [.alternate, .control], [.alternate, .shift],
+        ] {
             let modified = UIKeyCommand(input: "4", modifierFlags: modifiers, action: action)
             webView.perform(modified.action, with: modified)
         }
-        for input in ["", "11", "x"] {
-            let invalid = UIKeyCommand(input: input, modifierFlags: [], action: action)
-            webView.perform(invalid.action, with: invalid)
+        for modifiers: UIKeyModifierFlags in [[], .alternate] {
+            for input in ["", "11", "x"] {
+                let invalid = UIKeyCommand(input: input, modifierFlags: modifiers, action: action)
+                webView.perform(invalid.action, with: invalid)
+            }
         }
 
         XCTAssertEqual(dispatchCount, 0)
         XCTAssertFalse(command.wantsPriorityOverSystemBehavior)
     }
 
-    private func numberCommand(_ input: String, in webView: ExcalidrawWebView) throws -> UIKeyCommand {
-        try XCTUnwrap(webView.keyCommands?.first { $0.input == input && $0.modifierFlags.isEmpty })
+    private func numberCommand(
+        _ input: String, alternate: Bool = false, in webView: ExcalidrawWebView
+    ) throws -> UIKeyCommand {
+        let modifiers: UIKeyModifierFlags = alternate ? .alternate : []
+        return try XCTUnwrap(webView.keyCommands?.first { $0.input == input && $0.modifierFlags == modifiers })
     }
 
     private func makeWebView(

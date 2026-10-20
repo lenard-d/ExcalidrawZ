@@ -638,7 +638,7 @@ final class ScreenAnnotationSession: ObservableObject {
                 )
             case .space:
                 run("window.excalidrawZHelper?.toggleToolbarAction(' ');")
-            case .escape:
+            case .escape, .alternateNumber:
                 break
         }
     }

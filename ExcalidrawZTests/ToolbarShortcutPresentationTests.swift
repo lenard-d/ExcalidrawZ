@@ -3,6 +3,12 @@ import XCTest
 @testable import ExcalidrawZ
 
 final class ToolbarShortcutPresentationTests: XCTestCase {
+    func testSecondBankShowsOptionInMainEditorPresentation() throws {
+        let presentation = ExcalidrawToolbarToolPresentation(order: .init())
+        let frame = try XCTUnwrap(presentation.compactItems.first { $0.tool == .frame })
+        XCTAssertEqual(frame.menuTitle(localizedName: "Rahmen"), "Rahmen (⌥4)")
+    }
+
     func testEveryPickerPartitionKeepsTheConfiguredKeyRoutes() {
         let order = ExcalidrawToolbarToolOrder(tools: [
             .frame, .lasso, .webEmbed, .hand, .laser, .magicFrame,
@@ -53,14 +59,15 @@ final class ToolbarShortcutPresentationTests: XCTestCase {
         assertMenuRoutes(items, order: order)
     }
 
-    func testToolsBeyondTenHaveNoFalseHintInAnyMenu() throws {
+    func testToolMovedPastTenUsesItsOptionHintInEveryMainEditorMenu() throws {
         var order = ExcalidrawToolbarToolOrder(tools: [.magicFrame])
         order.move(from: IndexSet(integer: 0), to: 11)
         let presentation = ExcalidrawToolbarToolPresentation(order: order)
         let item = try XCTUnwrap(presentation.compactItems.first { $0.tool == .magicFrame })
 
-        XCTAssertNil(item.shortcutLabel)
-        XCTAssertEqual(item.menuTitle(localizedName: "KI-Rahmen"), "KI-Rahmen")
+        XCTAssertEqual(item.shortcutLabel, "⌥1")
+        XCTAssertEqual(item.menuTitle(localizedName: "KI-Rahmen"), "KI-Rahmen (⌥1)")
+        XCTAssertEqual(order.tool(forShortcutNumber: 1, alternate: true), .magicFrame)
         assertMenuRoutes(presentation.items, order: order)
         assertMenuRoutes(presentation.compactItems, order: order)
     }
@@ -84,9 +91,14 @@ final class ToolbarShortcutPresentationTests: XCTestCase {
         line: UInt = #line
     ) {
         for item in items {
-            let routedNumber = (0...9).first { order.tool(forShortcutNumber: $0) == item.tool }
+            let route = [false, true].compactMap { alternate -> String? in
+                guard let number = (0...9).first(where: {
+                    order.tool(forShortcutNumber: $0, alternate: alternate) == item.tool
+                }) else { return nil }
+                return (alternate ? "⌥" : "") + String(number)
+            }.first
             let name = "Localized tool"
-            let expectedTitle = routedNumber.map { "\(name) (\($0))" } ?? name
+            let expectedTitle = route.map { "\(name) (\($0))" } ?? name
             XCTAssertEqual(item.menuTitle(localizedName: name), expectedTitle, file: file, line: line)
         }
     }
