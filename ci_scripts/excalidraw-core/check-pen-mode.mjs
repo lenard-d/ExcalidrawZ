@@ -143,6 +143,9 @@ test("Pencil connection and finger-move policy retain their own behavior", async
   ]);
   page.interaction.setPointerInputPolicy({ oneFingerAction: "none" });
   page.dispatch("pointerdown", { pointerType: "touch" });
+  assert.deepEqual(page.calls.keys, [
+    { type: "keydown", code: "Space" }, { type: "keyup", code: "Space" },
+  ]);
   assert.deepEqual(page.calls.tools, []);
   assert.equal(page.state.activeTool.locked, true);
   page.interaction.connectPencil(false);

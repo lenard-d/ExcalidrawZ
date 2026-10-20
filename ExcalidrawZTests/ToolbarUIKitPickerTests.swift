@@ -123,8 +123,10 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         send(.ended, at: CGPoint(x: control.bounds.maxX - 20, y: 22), through: gesture, to: coordinator)
         XCTAssertEqual(selected, items.last?.tool)
         control.isEnabled = false
-        send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
-        send(.ended, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        let otherEnabledSegment = CGPoint(x: control.bounds.maxX - 60, y: 22)
+        send(.began, at: otherEnabledSegment, through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, items.count - 1)
+        send(.ended, at: otherEnabledSegment, through: gesture, to: coordinator)
         XCTAssertEqual(selected, items.last?.tool)
     }
 
