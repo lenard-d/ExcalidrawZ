@@ -182,6 +182,12 @@ final class PageModeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["pages.open.2"].exists)
         capture(app, step: "Persisted original and copy in Pages after restart")
         copy.tap()
+        // Opening a list row moves the camera. The observed second header is the copy.
+        let headers = app.webViews.firstMatch.staticTexts.matching(identifier: "Page 1")
+        XCTAssertEqual(headers.count, 2)
+        let copiedHeader = headers.element(boundBy: 1)
+        try requireHittable(copiedHeader, in: app, step: "Observed copied Page 1 header after reopen")
+        copiedHeader.tap()
         try assertLayout("Grid", in: app)
         capture(app, step: "Persisted duplicated Grid page and ink after restart")
         try openPages(in: app)

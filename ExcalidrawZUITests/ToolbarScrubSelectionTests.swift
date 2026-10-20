@@ -322,7 +322,9 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(file.isHittable)
         XCTAssertTrue(pdf.isHittable)
         captureEditorPhase(app, name: "Share presents the observed Image, File and PDF menu")
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let canvas = app.webViews.firstMatch
+        XCTAssertTrue(canvas.isHittable)
+        canvas.tap()
         let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             !image.exists && !file.exists && !pdf.exists
         }, object: nil)
