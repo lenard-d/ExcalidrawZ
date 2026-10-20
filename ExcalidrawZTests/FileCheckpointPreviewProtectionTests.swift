@@ -61,12 +61,18 @@ final class FileCheckpointPreviewProtectionTests: XCTestCase {
     @MainActor
     private func fileCheckpoint(in context: NSManagedObjectContext) -> FileCheckpoint {
         let checkpointEntity = entity(named: "FileCheckpoint", type: FileCheckpoint.self)
+        let fileEntity = entity(named: "File", type: File.self)
         let owner = NSRelationshipDescription()
         owner.name = "file"
-        owner.destinationEntity = entity(named: "File", type: File.self)
+        owner.destinationEntity = fileEntity
         owner.minCount = 0
         owner.maxCount = 1
         checkpointEntity.properties.append(owner)
+        // Relationships do not retain their destination entity. The context's
+        // coordinator keeps this model and both entities alive without a store.
+        let model = NSManagedObjectModel()
+        model.entities = [checkpointEntity, fileEntity]
+        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
         let checkpoint = FileCheckpoint(entity: checkpointEntity, insertInto: context)
         checkpoint.id = UUID()
         return checkpoint
