@@ -9,11 +9,12 @@ import SwiftUI
 
 import SFSafeSymbols
 
-struct ExcalidrawToolbarMoreToolsMenu: View {
+struct ExcalidrawToolbarMoreToolsMenu<AdditionalActions: View>: View {
     @EnvironmentObject private var toolState: ToolState
 
     var overflowItems: [ExcalidrawToolbarToolPresentation.Item] = []
     var usesPrincipalLabel = false
+    @ViewBuilder var additionalActions: () -> AdditionalActions
 
     @State private var isMathInputSheetPresented = false
     @State private var isMermaidInputSheetPresented = false
@@ -51,27 +52,39 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
             }
 #endif
 #endif
-            Button {
-                isMermaidInputSheetPresented.toggle()
-            } label: {
-                Text(.localizable(.toolbarMermaid))
+            Section {
+                Button {
+                    isMermaidInputSheetPresented.toggle()
+                } label: {
+                    Label(.localizable(.toolbarMermaid), systemImage: "point.3.connected.trianglepath.dotted")
+                }
+                .accessibilityIdentifier("toolbar.insertMermaid")
+
+                Button {
+                    isMathInputSheetPresented.toggle()
+                } label: {
+                    Label(.localizable(.toolbarLatexMath), systemImage: "function")
+                }
+                .accessibilityIdentifier("toolbar.insertMath")
+
+                Button {
+                    isPDFPickerPresented.toggle()
+                } label: {
+                    Label(.localizable(.toolbarInsertPDF), systemImage: "doc.richtext")
+                }
+                .accessibilityIdentifier("toolbar.insertPDF")
+
+                Button {
+                    isPageModeSheetPresented = true
+                } label: {
+                    Label(String(localized: "Pages"), systemImage: "rectangle.stack")
+                }
+                .accessibilityIdentifier("toolbar.pages")
+            } header: {
+                Text("Insert")
             }
 
-            Button {
-                isMathInputSheetPresented.toggle()
-            } label: {
-                Text(.localizable(.toolbarLatexMath))
-            }
-
-            Button {
-                isPDFPickerPresented.toggle()
-            } label: {
-                Text(localizable: .toolbarInsertPDF)
-            }
-
-            Button(String(localized: "Pages")) {
-                isPageModeSheetPresented = true
-            }
+            additionalActions()
         } label: {
             if usesPrincipalLabel {
                 menuLabel.labelStyle(.iconOnly).frame(width: 44, height: 44).contentShape(Circle())
@@ -93,13 +106,8 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
 
     @ViewBuilder
     private var menuLabel: some View {
-        if let item = activeOverflowItem {
-            Label {
-                Text(.localizable(.toolbarMoreTools))
-            } icon: {
-                item.tool.icon().frame(width: 20, height: 20)
-            }
-            .foregroundStyle(Color.accentColor)
+        if usesPrincipalLabel {
+            Label(.localizable(.toolbarMoreTools), systemImage: "ellipsis.circle")
         } else if #available(macOS 15.0, iOS 18.0, *) {
             Label(.localizable(.toolbarMoreTools), systemImage: "xmark.triangle.circle.square")
         } else if #available(macOS 13.0, iOS 16.0, *) {
@@ -112,5 +120,16 @@ struct ExcalidrawToolbarMoreToolsMenu: View {
     private var activeOverflowItem: ExcalidrawToolbarToolPresentation.Item? {
         guard usesPrincipalLabel else { return nil }
         return overflowItems.first { $0.tool == toolState.activatedTool }
+    }
+}
+
+extension ExcalidrawToolbarMoreToolsMenu where AdditionalActions == EmptyView {
+    init(
+        overflowItems: [ExcalidrawToolbarToolPresentation.Item] = [],
+        usesPrincipalLabel: Bool = false
+    ) {
+        self.overflowItems = overflowItems
+        self.usesPrincipalLabel = usesPrincipalLabel
+        self.additionalActions = { EmptyView() }
     }
 }

@@ -10,6 +10,9 @@ import SwiftUI
 import ChocofordUI
 import Logging
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 
 
 struct ExcalidrawCanvasView: View {
@@ -25,6 +28,7 @@ struct ExcalidrawCanvasView: View {
     @Environment(\.excalidrawNativeViewportInsets) private var nativeViewportInsets
 #if os(iOS)
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 #endif
 
     let logger = Logger(label: "ExcalidrawCanvasView")
@@ -198,6 +202,11 @@ struct ExcalidrawCanvasView: View {
 
     private var canvasWithSettings: some View {
         canvasWithDocumentUpdates
+#if os(iOS)
+            .watch(value: usesNativeIPadControls, initial: true) { _, _ in
+                applyNativeIPadControls()
+            }
+#endif
             .watch(value: colorScheme) { newValue in
                 applyColorMode(colorScheme: newValue)
             }
@@ -214,9 +223,39 @@ struct ExcalidrawCanvasView: View {
                 if state == .loaded {
                     applyAllSettings()
                     applyNativeViewportInsets()
+#if os(iOS)
+                    applyNativeIPadControls()
+#endif
                 }
             }
     }
+
+#if os(iOS)
+    private var usesNativeIPadControls: Bool {
+        type == .normal && interactionEnabled &&
+        ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
+            isPad: UIDevice.current.userInterfaceIdiom == .pad,
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
+    }
+
+    private func applyNativeIPadControls() {
+        guard loadingState == .loaded else { return }
+        let enabled = usesNativeIPadControls
+        Task { @MainActor in
+            do {
+                _ = try await excalidrawCore.webView.callAsyncJavaScript(
+                    "document.documentElement.classList.toggle('excalidrawz-native-ipad-controls', enabled);",
+                    arguments: ["enabled": enabled],
+                    contentWorld: .page
+                )
+            } catch {
+                onError(error)
+            }
+        }
+    }
+#endif
 
     // MARK: - Lifecycle Methods
 

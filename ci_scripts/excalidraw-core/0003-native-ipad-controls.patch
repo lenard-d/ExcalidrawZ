@@ -1,0 +1,19 @@
+diff --git a/excalidraw-app/index.scss b/excalidraw-app/index.scss
+index ac06070..4bbd279 100644
+--- a/excalidraw-app/index.scss
++++ b/excalidraw-app/index.scss
+@@ -1,5 +1,14 @@
+ @import "../packages/excalidraw/css/variables.module.scss";
+ 
++// SwiftUI supplies these controls only in the full-width native iPad editor.
++html.excalidrawz-native-ipad-controls .excalidraw {
++  .layer-ui__wrapper__footer-left .zoom-actions,
++  .layer-ui__wrapper__footer-left .undo-redo-buttons,
++  .App-menu_top__left > .ToolIcon__penMode {
++    display: none !important;
++  }
++}
++
+ html.excalidrawz-transparent-canvas {
+   &,
+   body,

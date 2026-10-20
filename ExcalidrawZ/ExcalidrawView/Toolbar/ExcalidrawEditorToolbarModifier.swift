@@ -45,10 +45,22 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
 
     private var shouldFloatNavigationToolbarOverCanvas: Bool {
 #if os(iOS)
-        guard !usesCompactIOSBottomToolbar else { return false }
-        return UIDevice.current.userInterfaceIdiom == .pad
+        !usesNativeIPadControls && !usesCompactIOSBottomToolbar && UIDevice.current.userInterfaceIdiom == .pad
 #elseif os(macOS)
         true
+#else
+        false
+#endif
+    }
+
+    private var usesNativeIPadControls: Bool {
+#if os(iOS)
+        if case .collaborationFile = fileState.currentActiveFile { return false }
+        return ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
+            isPad: UIDevice.current.userInterfaceIdiom == .pad,
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width
+        )
 #else
         false
 #endif
@@ -206,12 +218,24 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
                 CompactExcalidrawBottomToolbarContent()
             } else {
                 ToolbarItemGroup(placement: .principal) {
-                    ExcalidrawToolbar()
+                    ExcalidrawToolbar(usesExternalSecondaryMenu: usesNativeIPadControls)
                 }
             }
         }
 
-        sharedPrimaryActionToolbarContent()
+        if usesNativeIPadControls,
+           fileState.currentActiveFile != nil,
+           lockedContentState.activeFileLockState != .locked {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if let core = fileState.excalidrawWebCoordinator {
+                    ExcalidrawIPadEditorActions(core: core) {
+                        fileProtectionMenuActions()
+                    }
+                }
+            }
+        } else {
+            sharedPrimaryActionToolbarContent()
+        }
     }
 
     private func presentPencilModeTipsIfNeeded() {
@@ -342,6 +366,36 @@ struct ExcalidrawEditorToolbarModifier: ViewModifier {
                 if aiChatPreferences.isAIEnabled && AIChatAvailability.isAvailable {
                     AICreditsToolbarButton()
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func fileProtectionMenuActions() -> some View {
+        if case .file(let file) = fileState.currentActiveFile, !file.inTrash {
+            Section {
+                switch lockedContentState.activeFileLockState {
+                    case .plaintext:
+                        lockedFileToolbarButton(file)
+                            .accessibilityIdentifier("toolbar.protectFile")
+                    case .temporarilyUnlocked:
+                        Button {
+                            Task { @MainActor in await relockUnlockedContent() }
+                        } label: {
+                            Label(.localizable(.lockFileTitle), systemImage: LockedContentSymbols.keyShield)
+                        }
+                        .accessibilityIdentifier("toolbar.relockFile")
+                        Button(role: .destructive) {
+                            let fileObjectID = file.objectID
+                            Task { @MainActor in await removeFileLock(fileObjectID: fileObjectID) }
+                        } label: {
+                            Label(.localizable(.settingsSecurityRemoveLockButton), systemImage: LockedContentSymbols.removeLock)
+                        }
+                    case .locked:
+                        EmptyView()
+                }
+            } header: {
+                Text("File protection")
             }
         }
     }

@@ -145,31 +145,21 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         // Post-release assertions do not prove native glass animation during contact.
     }
 
-    func testStableLockAndCombinedToolActionsMenu() {
+    func testNativeTopBarAndSecondaryToolActionsMenu() {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
         XCTAssertTrue(control.waitForExistence(timeout: 15))
-        let lock = app.buttons["toolbar.toolLock"].firstMatch
         let menu = app.buttons["toolbar.moreTools"].firstMatch
-        XCTAssertTrue(lock.isHittable)
         XCTAssertTrue(menu.isHittable)
-        let originalFrame = lock.frame
-        XCTAssertEqual(originalFrame.width, menu.frame.width, accuracy: 1)
-        XCTAssertEqual(originalFrame.height, menu.frame.height, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(originalFrame.width, 44)
-        XCTAssertGreaterThanOrEqual(originalFrame.height, 44)
-
-        let initialLockState = lock.isSelected
-        lock.tap()
-        waitForSelectedState(!initialLockState, of: lock)
-        capture(app, name: "Tool lock after confirmed state change")
-        XCTAssertEqual(lock.frame.width, originalFrame.width, accuracy: 1)
-        XCTAssertEqual(lock.frame.height, originalFrame.height, accuracy: 1)
-        lock.tap()
-        waitForSelectedState(initialLockState, of: lock)
-        capture(app, name: "Tool lock after restoring initial state")
-        XCTAssertEqual(lock.frame.width, originalFrame.width, accuracy: 1)
-        XCTAssertEqual(lock.frame.height, originalFrame.height, accuracy: 1)
+        XCTAssertTrue(app.buttons["toolbar.style"].isHittable)
+        XCTAssertTrue(app.buttons["toolbar.share"].isHittable)
+        XCTAssertTrue(app.buttons["toolbar.undo"].exists)
+        XCTAssertFalse(app.buttons["toolbar.toolLock"].exists)
+        XCTAssertFalse(app.buttons["toolbar.protectFile"].exists)
+        XCTAssertGreaterThanOrEqual(menu.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(menu.frame.height, 44)
+        XCTAssertEqual(menu.frame.midY, control.frame.midY, accuracy: 12)
+        capture(app, name: "Native top bar before opening secondary actions")
 
         let cursor = tool(named: "Selection", in: control)
         cursor.tap()
@@ -179,10 +169,13 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(app.buttons["Mermaid to Excalidraw"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Math"].exists)
         XCTAssertTrue(app.buttons["Insert PDF"].exists)
+        XCTAssertTrue(app.buttons["toolbar.pages"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["toolbar.penMode"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["toolbar.toolLock"].exists)
         // The preserved simulator order places Laser after the nine visible tools.
         let laser = tool(named: "Laser", in: app)
         XCTAssertTrue(laser.exists, "Configured overflow tools and insert actions must share this menu")
-        capture(app, name: "One menu contains configured overflow tools and insert actions")
+        capture(app, name: "Secondary menu contains configured tools, insert actions and drawing modes")
         laser.tap()
         let noVisibleSelection = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
@@ -196,6 +189,63 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         menu.tap()
         waitForSelectedState(true, of: tool(named: "Laser", in: app))
         capture(app, name: "Combined menu confirms Laser selection")
+    }
+
+    func testPenModeAndKeepToolActiveRemainIndependent() {
+        let app = openSyntheticDrawing()
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 15))
+        menu.tap()
+        let initialPenMode = menuToggleIsOn("toolbar.penMode", in: app)
+        let initialToolLock = menuToggleIsOn("toolbar.toolLock", in: app)
+        app.descendants(matching: .any)["toolbar.toolLock"].firstMatch.tap()
+        reopenMenuIfNeeded(menu, in: app)
+        XCTAssertEqual(menuToggleIsOn("toolbar.penMode", in: app), initialPenMode)
+        XCTAssertEqual(menuToggleIsOn("toolbar.toolLock", in: app), !initialToolLock)
+
+        app.descendants(matching: .any)["toolbar.penMode"].firstMatch.tap()
+        reopenMenuIfNeeded(menu, in: app)
+        XCTAssertEqual(menuToggleIsOn("toolbar.penMode", in: app), !initialPenMode)
+        XCTAssertEqual(menuToggleIsOn("toolbar.toolLock", in: app), !initialToolLock)
+        capture(app, name: "Pen mode and keep-tool-active show independent states")
+    }
+
+    func testZoomAndInspectorAreAvailableFromTheSecondaryMenu() {
+        let app = openSyntheticDrawing()
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 15))
+        menu.tap()
+        let zoom = app.buttons["toolbar.zoom"].firstMatch
+        zoom.swipeUp()
+        XCTAssertTrue(zoom.isHittable)
+        zoom.tap()
+        let zoom200 = app.buttons["toolbar.zoom.200"].firstMatch
+        XCTAssertTrue(zoom200.waitForExistence(timeout: 3))
+        zoom200.tap()
+        menu.tap()
+        XCTAssertTrue(app.buttons["toolbar.zoom"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["toolbar.zoom"].label.contains("200"))
+        let inspector = app.buttons["toolbar.inspector"].firstMatch
+        inspector.swipeUp()
+        inspector.tap()
+        let search = app.descendants(matching: .any)["toolbar.inspector.search"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        search.tap()
+        capture(app, name: "Search inspector opened through the native secondary menu")
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
+    }
+
+    private func reopenMenuIfNeeded(_ menu: XCUIElement, in app: XCUIApplication) {
+        if !app.descendants(matching: .any)["toolbar.penMode"].firstMatch.exists {
+            menu.tap()
+        }
+        XCTAssertTrue(app.descendants(matching: .any)["toolbar.penMode"].firstMatch.waitForExistence(timeout: 3))
+    }
+
+    private func menuToggleIsOn(_ identifier: String, in app: XCUIApplication) -> Bool {
+        let toggle = app.descendants(matching: .any)[identifier].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 3))
+        return toggle.isSelected || (toggle.value as? String) == "1"
     }
 
     private func waitForSelectedState(_ selected: Bool, of element: XCUIElement) {
