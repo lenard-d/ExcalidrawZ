@@ -26,6 +26,9 @@ enum PageModeSceneScript {
         width: page.width,
         height: page.height,
         locked: page.locked === true,
+        layout: ["blank", "grid", "ruled"].includes(metadata(page)?.layout) ? metadata(page).layout : "blank",
+        x: page.x,
+        y: page.y,
     });
     const state = openedPageID => JSON.stringify({ pages: pages.map(describe), openedPageID });
     const getPage = () => {
@@ -33,7 +36,7 @@ enum PageModeSceneScript {
         if (!page) throw new Error("pageMissing");
         return page;
     };
-    const changesScene = ["add", "rename", "move", "remove"].includes(command.action);
+    const changesScene = ["add", "rename", "move", "remove", "setLayout"].includes(command.action);
     if (changesScene && api.getAppState().viewModeEnabled) {
         throw new Error("viewMode");
     }
@@ -46,6 +49,37 @@ enum PageModeSceneScript {
     });
     const capture = { captureUpdate: "IMMEDIATELY" };
     const cameraOptions = { animate: false, canvasOffsets: { top: 40, right: 40, bottom: 40, left: 40 } };
+    const checkedLayout = value => {
+        if (!["blank", "grid", "ruled"].includes(value)) throw new Error("invalidLayout");
+        return value;
+    };
+    const isGuide = (element, page) => element.type === "line" && element.frameId === page.id &&
+        element.locked === true && !element.boundElements?.length &&
+        element.customData?.excalidrawZPageGuide?.version === 1;
+    // Standard line children keep the paper visible in other Excalidraw apps and exports.
+    const makeGuides = (page, layout) => {
+        if (layout === "blank") return [];
+        const { x, y, width, height } = page;
+        if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0 || width > 20000 || height > 20000) {
+            throw new Error("invalidSize");
+        }
+        // At most 99 lines in either direction, including resized/imported pages.
+        const spacing = 20 * Math.max(1, Math.ceil(Math.max(width, height) / 2000));
+        const skeletons = [];
+        const line = (x, y, width, height) => ({
+            type: "line", x, y, width, height, points: [[0, 0], [width, height]],
+            strokeColor: "#b8c5d6", strokeWidth: 0.5, roughness: 0,
+            startArrowhead: null, endArrowhead: null,
+        });
+        for (let offset = spacing; offset < height; offset += spacing) skeletons.push(line(x, y + offset, width, 0));
+        if (layout === "grid") {
+            for (let offset = spacing; offset < width; offset += spacing) skeletons.push(line(x + offset, y, 0, height));
+        }
+        const guides = helper.createElements(skeletons);
+        if (guides.length !== skeletons.length || guides.some(element => element.type !== "line")) throw new Error("failedAction");
+        return guides.map(element => ({ ...element, frameId: page.id, locked: true,
+            customData: { ...element.customData, excalidrawZPageGuide: { version: 1, pageID: page.id } } }));
+    };
     // Keep the live objects intact until updateScene captures the undo change.
     const updatePages = patches => {
         const updates = new Map(patches.map(patch => [patch.id, patch.updates]));
@@ -63,7 +97,9 @@ enum PageModeSceneScript {
             return state(null);
         case "add": {
             const { width, height } = command;
-            if (![width, height].every(value => Number.isFinite(value) && value >= 100 && value <= 2000)) {
+            const minimum = command.pageID == null ? 100 : 1;
+            const maximum = command.pageID == null ? 2000 : 20000;
+            if (![width, height].every(value => Number.isFinite(value) && value >= minimum && value <= maximum)) {
                 throw new Error("invalidSize");
             }
             // A circumscribed rectangle also clears rotated existing elements.
@@ -74,17 +110,58 @@ enum PageModeSceneScript {
                 const radius = Math.hypot(element.width, element.height) / 2;
                 bottom = Math.max(bottom, element.y + element.height / 2 + radius);
             }
-            const x = pages.length ? pages[pages.length - 1].x : 0;
-            const y = bottom + 80;
-            if (!Number.isFinite(y) || Math.abs(y) > 1e8) throw new Error("noSpace");
+            let x = pages.length ? pages[pages.length - 1].x : 0;
+            let y = bottom + 80;
+            if (command.pageID != null) {
+                const reference = getPage();
+                assertEditable(reference);
+                if (command.placement !== "below" && command.placement !== "right") throw new Error("failedAction");
+                x = reference.x + (command.placement === "right" ? reference.width + 80 : 0);
+                y = reference.y + (command.placement === "below" ? reference.height + 80 : 0);
+                for (const element of live) {
+                    const angle = Number.isFinite(element.angle) ? element.angle : 0;
+                    const halfWidth = (Math.abs(element.width * Math.cos(angle)) + Math.abs(element.height * Math.sin(angle))) / 2;
+                    const halfHeight = (Math.abs(element.width * Math.sin(angle)) + Math.abs(element.height * Math.cos(angle))) / 2;
+                    const cx = element.x + element.width / 2;
+                    const cy = element.y + element.height / 2;
+                    if (cx + halfWidth > x && cx - halfWidth < x + width && cy + halfHeight > y && cy - halfHeight < y + height) {
+                        throw new Error("spaceOccupied");
+                    }
+                }
+            }
+            if (![x, y].every(value => Number.isFinite(value) && Math.abs(value) <= 1e8)) throw new Error("noSpace");
             const created = helper.createElements([{ type: "frame", x, y, width, height, name: command.title || "", children: [] }]);
             if (created.length !== 1 || created[0].type !== "frame") throw new Error("failedAction");
             const frame = created[0];
             const highestOrder = pages.reduce((highest, page) => Math.max(highest, Number.isFinite(order(page)) ? order(page) : 0), -1);
-            frame.customData = { ...frame.customData, excalidrawZPage: { version: 1, order: highestOrder + 1 } };
-            helper.addElements([frame], capture);
+            const layout = checkedLayout(command.layout ?? "blank");
+            frame.customData = { ...frame.customData, excalidrawZPage: { version: 1, order: highestOrder + 1, layout } };
+            helper.addElements([...makeGuides(frame, layout), frame], capture);
             pages.push(frame);
             return state(frame.id);
+        }
+        case "setLayout": {
+            const page = getPage();
+            assertEditable(page);
+            const layout = checkedLayout(command.layout);
+            const guides = makeGuides(page, layout);
+            const copy = { ...page };
+            api.mutateElement(copy, { customData: { ...page.customData,
+                excalidrawZPage: { ...metadata(page), layout } } }, false);
+            const elements = all.map(element => {
+                if (element.id === page.id) return copy;
+                if (!element.isDeleted && isGuide(element, page)) {
+                    const deleted = { ...element };
+                    api.mutateElement(deleted, { isDeleted: true }, false);
+                    return deleted;
+                }
+                return element;
+            });
+            // Place guides behind this frame's ink without reordering any existing content.
+            const firstChild = elements.findIndex(element => element.id === page.id || element.frameId === page.id);
+            elements.splice(firstChild, 0, ...guides);
+            api.updateScene({ elements, ...capture });
+            return JSON.stringify({ pages: pages.map(item => describe(item.id === page.id ? copy : item)), openedPageID: null });
         }
         case "rename": {
             const page = getPage();
@@ -112,7 +189,8 @@ enum PageModeSceneScript {
             const children = all.filter(element => element.frameId === page.id);
             updatePages([
                 { id: page.id, updates: { isDeleted: true } },
-                ...children.map(element => ({ id: element.id, updates: { frameId: null } })),
+                ...children.map(element => ({ id: element.id, updates: isGuide(element, page)
+                    ? { isDeleted: true, frameId: null } : { frameId: null } })),
             ]);
             pages.splice(pages.indexOf(page), 1);
             return state(null);

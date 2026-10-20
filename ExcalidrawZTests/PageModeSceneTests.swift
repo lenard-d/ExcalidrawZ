@@ -104,6 +104,76 @@ final class PageModeSceneTests: XCTestCase {
         XCTAssertTrue(bool("rendered.elements[1].text === 'captured notes' && rendered.files.image.id === 'image' && rendered.options.exportingFrame.id === 'page'"))
     }
 
+    func testGridAndRuledPagesHaveIndependentStandardGuidesAndSurviveReload() throws {
+        context.evaluateScript("elements = [element('loose', { fileId: 'image', text: 'keep' })]; var original = JSON.stringify(elements[0]);")
+        let grid = try run(.init(action: .add, title: "Grid", width: 595, height: 842, layout: .grid))
+        let gridID = try XCTUnwrap(grid.openedPageID)
+        let ruled = try run(.init(action: .add, title: "Ruled", width: 842, height: 595, layout: .ruled))
+        let ruledID = try XCTUnwrap(ruled.openedPageID)
+        XCTAssertNotEqual(gridID, ruledID)
+        context.setObject(gridID, forKeyedSubscript: "gridID" as NSString)
+        context.setObject(ruledID, forKeyedSubscript: "ruledID" as NSString)
+        XCTAssertTrue(bool("JSON.stringify(elements[0]) === original && writes.length === 2 && writes.every(write => write.options.captureUpdate === 'IMMEDIATELY')"))
+        XCTAssertTrue(bool("elements.filter(e => e.frameId === gridID).length === 71 && elements.filter(e => e.frameId === ruledID).length === 29"))
+        XCTAssertTrue(bool("elements.filter(e => e.type === 'line').every(e => e.locked && e.roughness === 0 && e.points.length === 2 && e.customData.excalidrawZPageGuide.version === 1)"))
+        context.evaluateScript("elements = JSON.parse(JSON.stringify(elements));")
+        XCTAssertEqual(try run(.init(action: .list)).pages.map(\.layout), [.grid, .ruled])
+        let snapshot = try PageModeExportSnapshot(json: execute(.init(action: .exportScene)))
+        let scene = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(snapshot.sceneJSON.utf8)) as? [String: Any])
+        let exported = try XCTUnwrap(scene["elements"] as? [[String: Any]])
+        XCTAssertEqual(exported.filter { $0["type"] as? String == "line" }.count, 100)
+        XCTAssertNotNil((scene["files"] as? [String: Any])?["image"])
+    }
+
+    func testContextAddUsesSelectedPageForBothDirectionsAndRefusesOccupiedSpace() throws {
+        context.evaluateScript("elements = [page('selected', 0, { x: 100, y: 200, width: 595, height: 842 }), page('last', 1, { x: 3000, y: 4000 })]; var before = JSON.stringify(elements);")
+        _ = try run(.init(action: .add, pageID: "selected", width: 595, height: 842, layout: .ruled, placement: .right))
+        XCTAssertTrue(bool("elements.find(e => e.id === 'new1').x === 775 && elements.find(e => e.id === 'new1').y === 200 && JSON.stringify(elements.slice(0, 2)) === before"))
+        _ = try run(.init(action: .add, pageID: "selected", width: 595, height: 842, layout: .blank, placement: .below))
+        XCTAssertTrue(bool("elements.filter(e => e.type === 'frame').at(-1).x === 100 && elements.filter(e => e.type === 'frame').at(-1).y === 1122"))
+        let writesBefore = context.evaluateScript("writes.length").toInt32()
+        XCTAssertThrowsError(try run(.init(action: .add, pageID: "selected", width: 595, height: 842, placement: .right)))
+        XCTAssertEqual(context.evaluateScript("writes.length").toInt32(), writesBefore)
+    }
+
+    func testLayoutReplacementPreservesInkOtherPagesAndForeignMetadataBehindInk() throws {
+        context.evaluateScript("elements = [page('one', 0, { width: 595, height: 842 }), element('answer', { frameId: 'one', text: 'ink', fileId: 'image' }), page('two', 1)]; var inkBefore = JSON.stringify(elements[1]); var otherBefore = JSON.stringify(elements[2]);")
+        _ = try run(.init(action: .setLayout, pageID: "one", layout: .grid))
+        XCTAssertTrue(bool("JSON.stringify(elements.find(e => e.id === 'answer')) === inkBefore && JSON.stringify(elements.find(e => e.id === 'two')) === otherBefore"))
+        XCTAssertTrue(bool("elements.findIndex(e => e.type === 'line') < elements.findIndex(e => e.id === 'answer') && writes.length === 1 && JSON.parse(writes[0].before).length === 3"))
+        _ = try run(.init(action: .setLayout, pageID: "one", layout: .ruled))
+        XCTAssertTrue(bool("elements.filter(e => !e.isDeleted && e.type === 'line').length === 42 && elements.filter(e => e.isDeleted && e.type === 'line').length === 71 && elements.find(e => e.id === 'one').customData.other === 'kept'"))
+        _ = try run(.init(action: .setLayout, pageID: "one", layout: .blank))
+        XCTAssertTrue(bool("elements.filter(e => !e.isDeleted && e.type === 'line').length === 0 && JSON.stringify(elements.find(e => e.id === 'answer')) === inkBefore && writes.length === 3"))
+    }
+
+    func testRemoveDeletesGeneratedGuidesButKeepsUnlockedOrBoundUserContent() throws {
+        let result = try run(.init(action: .add, width: 595, height: 842, layout: .ruled))
+        let id = try XCTUnwrap(result.openedPageID)
+        context.setObject(id, forKeyedSubscript: "ownerID" as NSString)
+        context.evaluateScript("var guides = elements.filter(e => e.type === 'line'); guides[0].locked = false; guides[0].text = 'edited'; guides[1].boundElements = [{ id: 'text', type: 'text' }]; elements.push(element('text', { frameId: ownerID, text: 'notes', containerId: guides[1].id }));")
+        _ = try run(.init(action: .remove, pageID: id))
+        XCTAssertTrue(bool("guides[0].text === 'edited' && !elements.find(e => e.id === guides[0].id).isDeleted && !elements.find(e => e.id === guides[1].id).isDeleted && elements.find(e => e.id === 'text').text === 'notes' && elements.filter(e => !e.isDeleted).length === 3"))
+    }
+
+    func testLayoutRegeneratesWithinResizedPageAndBoundsLineCount() throws {
+        context.evaluateScript("elements = [page('large', 0, { x: 100, y: 200, width: 20000, height: 20000 })];")
+        _ = try run(.init(action: .setLayout, pageID: "large", layout: .grid))
+        XCTAssertTrue(bool("elements.filter(e => !e.isDeleted && e.type === 'line').length === 198 && elements.filter(e => e.type === 'line').every(e => e.x >= 100 && e.y >= 200 && e.x + e.width <= 20100 && e.y + e.height <= 20200)"))
+        context.evaluateScript("var resized = elements.find(e => e.id === 'large'); resized.width = 400; resized.height = 300;")
+        _ = try run(.init(action: .setLayout, pageID: "large", layout: .grid))
+        XCTAssertTrue(bool("elements.filter(e => !e.isDeleted && e.type === 'line').length === 33 && elements.filter(e => !e.isDeleted && e.type === 'line').every(e => e.x + e.width <= 500 && e.y + e.height <= 500)"))
+    }
+
+    func testOldPageDefaultsBlankAndLockedLayoutCannotWrite() throws {
+        context.evaluateScript("elements = [page('old', 0), page('locked', 1, { locked: true })];")
+        XCTAssertEqual(try run(.init(action: .list)).pages.map(\.layout), [.blank, .blank])
+        XCTAssertThrowsError(try run(.init(action: .setLayout, pageID: "locked", layout: .grid)))
+        context.evaluateScript("appState.viewModeEnabled = true;")
+        XCTAssertThrowsError(try run(.init(action: .setLayout, pageID: "old", layout: .grid)))
+        XCTAssertTrue(bool("writes.length === 0"))
+    }
+
     func testOversizedPageExportStaysWithinRasterBudget() throws {
         for (width, height) in [(8192.0, 8192.0), (20_000.0, 100.0), (100.0, 20_000.0)] {
             let options = try renderOptions(width: width, height: height)

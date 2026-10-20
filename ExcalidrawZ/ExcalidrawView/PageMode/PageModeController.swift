@@ -28,10 +28,35 @@ final class PageModeController: ObservableObject {
         guard beginAction() else { return false }
         defer { isBusy = false }
         do {
-            let result = try await execute(command)
-            try validate()
-            guard let data = result.data(using: .utf8) else { throw PageModeError.documentChanged }
-            pages = try JSONDecoder().decode(PageModeState.self, from: data).pages
+            _ = try await executeState(command)
+            return true
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    /// Keeps add and camera navigation in one busy interval, using the returned page ID.
+    func createPage(paper: PageModePaper, layout: PageModeLayout) async -> Bool {
+        await createPage(command: .init(action: .add, width: paper.width, height: paper.height, layout: layout))
+    }
+
+    func createPage(after page: PageModePage, placement: PageModePlacement) async -> Bool {
+        await createPage(command: .init(action: .add, pageID: page.id, width: page.width,
+            height: page.height, layout: page.layout ?? .blank, placement: placement))
+    }
+
+    private func createPage(command: PageModeCommand) async -> Bool {
+        guard beginAction() else { return false }
+        defer { isBusy = false }
+        do {
+            var command = command
+            command.title = String(localized: "Page \(pages.count + 1)")
+            let state = try await executeState(command)
+            guard let id = state.openedPageID, state.pages.contains(where: { $0.id == id }) else {
+                throw PageModeError.failedAction
+            }
+            _ = try await executeState(.init(action: .open, pageID: id))
             return true
         } catch {
             report(error)
@@ -91,6 +116,15 @@ final class PageModeController: ObservableObject {
         errorMessage = nil
         isBusy = true
         return true
+    }
+
+    private func executeState(_ command: PageModeCommand) async throws -> PageModeState {
+        try validate()
+        let result = try await execute(command)
+        try validate()
+        let state = try JSONDecoder().decode(PageModeState.self, from: Data(result.utf8))
+        pages = state.pages
+        return state
     }
 
     private func validate() throws {

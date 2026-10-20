@@ -6,6 +6,9 @@ struct PageModePage: Codable, Identifiable, Equatable, Sendable {
     let width: Double
     let height: Double
     let locked: Bool
+    var layout: PageModeLayout?
+    var x: Double?
+    var y: Double?
 }
 
 struct PageModeState: Codable, Sendable {
@@ -15,7 +18,7 @@ struct PageModeState: Codable, Sendable {
 
 struct PageModeCommand: Encodable, Sendable {
     enum Action: String, Encodable {
-        case list, add, rename, move, remove, open, canvas, exportScene
+        case list, add, rename, move, remove, open, canvas, exportScene, setLayout
     }
 
     var action: Action
@@ -24,11 +27,39 @@ struct PageModeCommand: Encodable, Sendable {
     var width: Double?
     var height: Double?
     var offset: Int?
+    var layout: PageModeLayout?
+    var placement: PageModePlacement?
 
     var changesScene: Bool {
         switch action {
-            case .add, .rename, .move, .remove: true
+            case .add, .rename, .move, .remove, .setLayout: true
             default: false
+        }
+    }
+}
+
+enum PageModeLayout: String, Codable, CaseIterable, Identifiable, Sendable {
+    case blank, grid, ruled
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+            case .blank: String(localized: "Blank")
+            case .grid: String(localized: "Grid")
+            case .ruled: String(localized: "Ruled")
+        }
+    }
+}
+
+enum PageModePlacement: String, Encodable, CaseIterable, Identifiable, Sendable {
+    case below, right
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+            case .below: String(localized: "Add below")
+            case .right: String(localized: "Add right")
         }
     }
 }
@@ -62,6 +93,8 @@ enum PageModeError: String, LocalizedError {
     case failedAction
     case invalidTitle
     case invalidMove
+    case invalidLayout
+    case spaceOccupied
 
     var errorDescription: String? {
         switch self {
@@ -89,6 +122,10 @@ enum PageModeError: String, LocalizedError {
                 String(localized: "Use a page title with 1 to 120 characters.")
             case .invalidMove:
                 String(localized: "The page move is not supported.")
+            case .invalidLayout:
+                String(localized: "The page layout is not supported.")
+            case .spaceOccupied:
+                String(localized: "There is drawing content in that space. Choose another direction.")
         }
     }
 }
