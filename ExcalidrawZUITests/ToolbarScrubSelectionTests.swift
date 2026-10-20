@@ -5,6 +5,9 @@ import UIKit
 
 final class ToolbarScrubSelectionTests: XCTestCase {
     private var launchedApp: XCUIApplication?
+    private let defaultDirectToolNames = [
+        "Selection", "Rectangle", "Diamond", "Ellipse", "Arrow", "Line", "Draw", "Text", "Insert image",
+    ]
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -202,7 +205,8 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(control.waitForExistence(timeout: 15))
         let menu = app.buttons["toolbar.moreTools"].firstMatch
         let extraTools = app.buttons["toolbar.extraTools"].firstMatch
-        XCTAssertEqual(control.buttons.count, 9, "The preserved default configuration must keep nine direct tools")
+        // Run this case before Add in root's fresh default-only simulator.
+        assertConfiguredDirectTools(defaultDirectToolNames, in: app)
         XCTAssertTrue(menu.isHittable)
         XCTAssertTrue(extraTools.isHittable)
         XCTAssertFalse(app.descendants(matching: .any)["toolbar.style"].exists)
@@ -281,6 +285,33 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
         XCTAssertTrue(app.segmentedControls["toolbar.toolPicker"].firstMatch.isHittable)
         captureEditorPhase(app, name: "Drawing settings dismissed by the observed outside blank region")
+    }
+
+    func testDefaultToolbarAddsFrameAndLaserAndPersistsAfterRelaunch() {
+        // This case changes only root's disposable default context. It must fail before Add if defaults differ.
+        let app = openSyntheticDrawing()
+        assertConfiguredDirectTools(defaultDirectToolNames, in: app)
+        captureEditorPhase(app, name: "Untouched default nine before Add")
+
+        addConfiguredDirectTool("frame", name: "Frame", in: app)
+        let tenTools = defaultDirectToolNames + ["Frame"]
+        assertConfiguredDirectTools(tenTools, in: app)
+        selectConfiguredDirectTool("Frame", in: app)
+        captureEditorPhase(app, name: "Frame added as the tenth direct tool")
+
+        addConfiguredDirectTool("laser", name: "Laser", in: app)
+        let elevenTools = tenTools + ["Laser"]
+        assertConfiguredDirectTools(elevenTools, in: app)
+        selectConfiguredDirectTool("Laser", in: app)
+        selectConfiguredDirectTool("Frame", in: app)
+        captureEditorPhase(app, name: "Frame and Laser follow the unchanged default nine")
+
+        app.terminate()
+        let relaunched = openSyntheticDrawing()
+        assertConfiguredDirectTools(elevenTools, in: relaunched)
+        selectConfiguredDirectTool("Frame", in: relaunched)
+        selectConfiguredDirectTool("Laser", in: relaunched)
+        captureEditorPhase(relaunched, name: "Eleven direct tools persist after process relaunch and a new drawing")
     }
 
     func testPenModeAndKeepToolActiveRemainIndependent() {
@@ -566,6 +597,77 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         waitForMenuToggle("toolbar.style", toBe: true, in: app)
         dismissSettingsMenu(in: app)
         assertNativeActionGeometry(in: app)
+    }
+
+    private func assertConfiguredDirectTools(_ names: [String], in app: XCUIApplication) {
+        let picker = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 15))
+        let countMatches = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in picker.buttons.count == names.count }, object: picker
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [countMatches], timeout: 5), .completed,
+                       "This case requires its exact configured tool count; never reset preserved preferences")
+        let window = app.windows.firstMatch.frame
+        for (index, name) in names.enumerated() {
+            let button = picker.buttons.element(boundBy: index)
+            XCTAssertTrue(button.label == name || button.label.hasPrefix("\(name) ("),
+                          "Direct slot \(index + 1) must remain \(name), got \(button.label)")
+            XCTAssertTrue(button.isHittable, name)
+            XCTAssertGreaterThan(button.frame.width, 0, name)
+            XCTAssertGreaterThanOrEqual(button.frame.minX, window.minX, name)
+            XCTAssertLessThanOrEqual(button.frame.maxX, window.maxX, name)
+            if index > 0 {
+                XCTAssertGreaterThanOrEqual(button.frame.minX, picker.buttons.element(boundBy: index - 1).frame.maxX)
+            }
+        }
+        let extraTools = app.buttons["toolbar.extraTools"].firstMatch
+        XCTAssertTrue(extraTools.isHittable)
+        XCTAssertGreaterThanOrEqual(extraTools.frame.minX, picker.frame.maxX)
+        XCTAssertLessThan(extraTools.frame.maxX, app.buttons["toolbar.undo"].firstMatch.frame.minX)
+        assertNativeActionGeometry(in: app)
+    }
+
+    private func addConfiguredDirectTool(_ identifier: String, name: String, in app: XCUIApplication) {
+        app.buttons["toolbar.moreTools"].firstMatch.tap()
+        let drawingSettings = app.buttons["toolbar.drawingSettings"].firstMatch
+        revealMenuAction(drawingSettings, in: app)
+        drawingSettings.tap()
+        let addTool = app.buttons["settings.toolbar.addTool"].firstMatch
+        XCTAssertTrue(addTool.waitForExistence(timeout: 5))
+        let form = app.collectionViews.containing(.button, identifier: "settings.toolbar.addTool").firstMatch
+        XCTAssertTrue(form.exists)
+        for _ in 0..<4 where !addTool.isHittable || !form.frame.contains(addTool.frame) {
+            form.swipeUp()
+        }
+        guard addTool.isHittable, form.frame.contains(addTool.frame) else {
+            captureEditorPhase(app, name: "STOP Add tool is not fully visible in Drawing settings")
+            XCTFail("The observed settings form must scroll to Add tool")
+            return
+        }
+        addTool.tap()
+        let choice = app.buttons["settings.toolbar.add.\(identifier)"].firstMatch
+        captureEditorPhase(app, name: "Add tool menu before choosing \(name)")
+        guard choice.waitForExistence(timeout: 3), choice.isHittable else {
+            XCTFail("The owned Add tool menu must expose \(name)")
+            return
+        }
+        choice.tap()
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.50)).tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: addTool
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        XCTAssertTrue(app.segmentedControls["toolbar.toolPicker"].firstMatch.isHittable)
+    }
+
+    private func selectConfiguredDirectTool(_ name: String, in app: XCUIApplication) {
+        let picker = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        let button = tool(named: name, in: picker)
+        XCTAssertTrue(button.isHittable)
+        button.tap()
+        assertSelection(button, control: picker)
+        XCTAssertTrue((app.buttons["toolbar.extraTools"].firstMatch.value as? String ?? "").isEmpty,
+                       "A direct tool must not also be reported as the active overflow tool")
     }
 
     @discardableResult
