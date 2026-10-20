@@ -185,7 +185,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(menu.waitForExistence(timeout: 15))
         menu.tap()
         let drawingSettings = app.buttons["toolbar.drawingSettings"].firstMatch
-        scrollMenuUntilVisible(drawingSettings, in: app)
+        revealMenuAction(drawingSettings, in: app)
         guard drawingSettings.isHittable else {
             captureEditorPhase(app, name: "Drawing settings action unavailable")
             XCTFail("The settings menu must expose Drawing settings")
