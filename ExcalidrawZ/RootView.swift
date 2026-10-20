@@ -13,7 +13,15 @@ let debugLogger = Logger(label: "DEBUG")
 /// Don't do any other actions in this view.
 struct RootView: View {
     var body: some View {
+#if DEBUG && os(iOS) && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["EXCALIDRAWZ_PRESENTATION_WELCOME_FIXTURE"] == "1" {
+            PresentationWelcomeUITestFixture()
+        } else {
+            ContentView()
+        }
+#else
         ContentView()
+#endif
     }
 }
 
