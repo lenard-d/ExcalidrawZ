@@ -88,8 +88,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
     }
 
     func testOutsideReleaseKeepsLastContactedToolOnCanvas() {
-        let app = openSyntheticDrawing(stockTracking:
-            ProcessInfo.processInfo.environment["EXCALIDRAWZ_TOOLBAR_STOCK_TRACKING"] == "1")
+        let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
         XCTAssertTrue(control.waitForExistence(timeout: 15))
         let cursor = tool(named: "Selection", in: control)
@@ -240,7 +239,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         }
     }
 
-    private func openSyntheticDrawing(stockTracking: Bool = false) -> XCUIApplication {
+    private func openSyntheticDrawing() -> XCUIApplication {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()
         app.launchArguments = [
@@ -248,9 +247,6 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             "-AIChat.isEnabled", "NO", "-DisableCloudSync", "YES",
             "-WhatsNewLastBuild", "999999"
         ]
-        if stockTracking {
-            app.launchArguments.append("-ToolbarStockTrackingProbe")
-        }
         launchedApp = app
         app.launch()
 

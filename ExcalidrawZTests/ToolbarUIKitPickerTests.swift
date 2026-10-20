@@ -54,7 +54,7 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         XCTAssertEqual(selected, .laser, "A quick tap commits its own tool")
     }
 
-    func testCancellationAndOutsideReleaseRestoreBindingAndAllowAccessibilityActions() {
+    func testOutsideCancellationRestoresBindingAndAllowsAccessibilityActions() {
         let items = ExcalidrawToolbarToolPresentation(order: .init()).items
         var selected: ExcalidrawTool? = .ellipse
         let binding = Binding(get: { selected }, set: { selected = $0 })
@@ -62,41 +62,95 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         let gesture = ScrubInput()
         control.addGestureRecognizer(gesture)
 
-        for terminal: UIGestureRecognizer.State in [.cancelled, .failed, .ended] {
-            send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
-            send(.changed, at: CGPoint(x: -1, y: 22), through: gesture, to: coordinator)
-            XCTAssertEqual(control.selectedSegmentIndex, 3)
-            send(terminal, at: CGPoint(x: -1, y: 22), through: gesture, to: coordinator)
-            XCTAssertEqual(selected, .ellipse)
-            XCTAssertEqual(control.selectedSegmentIndex, 3)
-        }
+        send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.changed, at: CGPoint(x: -1, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, 0)
+        XCTAssertEqual(selected, .ellipse)
+        send(.cancelled, at: CGPoint(x: -1, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .ellipse)
+        XCTAssertEqual(control.selectedSegmentIndex, 3)
+        // Recognition can fail before a contact begins.
+        send(.failed, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .ellipse)
+        XCTAssertEqual(control.selectedSegmentIndex, 3)
         control.selectedSegmentIndex = 5
         control.sendActions(for: .valueChanged)
         XCTAssertEqual(selected, .line, "Accessibility and keyboard actions need no contact")
     }
 
-    func testInBoundsCancellationRestoresSelectionAndAllowsNextContact() {
-        for terminal: UIGestureRecognizer.State in [.cancelled, .failed] {
-            let items = ExcalidrawToolbarToolPresentation(order: .init()).items
-            var selected: ExcalidrawTool? = .ellipse
-            let binding = Binding(get: { selected }, set: { selected = $0 })
-            let (coordinator, control) = makePicker(items: items, selection: binding)
-            let gesture = ScrubInput()
-            control.addGestureRecognizer(gesture)
+    func testOutsideDragRetainsLastContactThenReentryChangesOutsideRelease() {
+        let items = ExcalidrawToolbarToolPresentation(order: .init(tools: [.laser, .frame, .ellipse])).items
+        var selected: ExcalidrawTool? = .cursor
+        let binding = Binding(get: { selected }, set: { selected = $0 })
+        let (coordinator, control) = makePicker(items: items, selection: binding)
+        let gesture = ScrubInput()
+        control.addGestureRecognizer(gesture)
 
-            send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
-            send(.changed, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
-            XCTAssertEqual(control.selectedSegmentIndex, 1)
-            XCTAssertEqual(selected, .ellipse)
-            send(terminal, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
-            XCTAssertEqual(selected, .ellipse)
-            XCTAssertEqual(control.selectedSegmentIndex, 3)
-
-            send(.began, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
-            send(.ended, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
-            XCTAssertEqual(selected, .line)
-            XCTAssertEqual(control.selectedSegmentIndex, 5)
+        send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, 0, "First contact on unselected Laser previews it")
+        send(.changed, at: CGPoint(x: 100, y: 22), through: gesture, to: coordinator)
+        for outside in [CGPoint(x: 100, y: 80), CGPoint(x: control.bounds.maxX + 50, y: 80)] {
+            send(.changed, at: outside, through: gesture, to: coordinator)
+            XCTAssertEqual(control.selectedSegmentIndex, 2, "Outside movement retains Ellipse, not the closest edge tool")
+            XCTAssertEqual(selected, .cursor, "Held preview does not commit the canvas tool")
         }
+        send(.changed, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, 1, "Re-entry updates the retained tool to Frame")
+        // Release outside without a final changed event must use the last contact.
+        send(.ended, at: CGPoint(x: -50, y: -50), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .frame)
+        XCTAssertEqual(control.selectedSegmentIndex, 1)
+
+        send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.ended, at: CGPoint(x: 20, y: 80), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .laser, "Outside release after only a began event retains its tool")
+        send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.ended, at: CGPoint(x: 100, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .ellipse, "An in-row release can supply the final contacted tool")
+    }
+
+    func testDisabledSegmentRetainsPreviewButDisabledControlCannotCommit() {
+        let items = ExcalidrawToolbarToolPresentation(order: .init()).items
+        var selected: ExcalidrawTool? = .ellipse
+        let binding = Binding(get: { selected }, set: { selected = $0 })
+        let (coordinator, control) = makePicker(items: items, selection: binding)
+        let gesture = ScrubInput()
+        control.addGestureRecognizer(gesture)
+        control.setEnabled(false, forSegmentAt: 1)
+
+        send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.changed, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, 0)
+        send(.ended, at: CGPoint(x: 60, y: 80), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .cursor)
+
+        send(.began, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
+        control.isEnabled = false
+        send(.ended, at: CGPoint(x: 220, y: 80), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .cursor)
+        XCTAssertEqual(control.selectedSegmentIndex, 0)
+    }
+
+    func testInBoundsCancellationRestoresSelectionAndAllowsNextContact() {
+        let items = ExcalidrawToolbarToolPresentation(order: .init()).items
+        var selected: ExcalidrawTool? = .ellipse
+        let binding = Binding(get: { selected }, set: { selected = $0 })
+        let (coordinator, control) = makePicker(items: items, selection: binding)
+        let gesture = ScrubInput()
+        control.addGestureRecognizer(gesture)
+
+        send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.changed, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, 1)
+        XCTAssertEqual(selected, .ellipse)
+        send(.cancelled, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .ellipse)
+        XCTAssertEqual(control.selectedSegmentIndex, 3)
+
+        send(.began, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
+        send(.ended, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .line)
+        XCTAssertEqual(control.selectedSegmentIndex, 5)
     }
 
     func testExternalBindingAndReorderInvalidateHeldCommit() {
@@ -115,14 +169,16 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         XCTAssertEqual(control.imageForSegment(at: 0)?.accessibilityLabel,
                        initial[0].menuTitle(localizedName: initial[0].tool.localization))
         send(.changed, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
-        send(.ended, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.ended, at: CGPoint(x: 20, y: 80), through: gesture, to: coordinator)
         XCTAssertEqual(selected, .ellipse)
         XCTAssertEqual(oldSelection, .cursor)
         XCTAssertEqual(control.imageForSegment(at: 0)?.accessibilityLabel,
                        reordered[0].menuTitle(localizedName: reordered[0].tool.localization))
         XCTAssertEqual(control.selectedSegmentIndex, 1)
         send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
-        send(.ended, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.changed, at: CGPoint(x: 20, y: 80), through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, 0)
+        send(.ended, at: CGPoint(x: 20, y: 80), through: gesture, to: coordinator)
         XCTAssertEqual(selected, .laser)
     }
 
@@ -139,7 +195,9 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         XCTAssertEqual(control.selectedSegmentIndex, 0)
         send(.changed, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
         XCTAssertEqual(control.selectedSegmentIndex, items.count - 1)
-        send(.ended, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+        send(.changed, at: CGPoint(x: 20, y: 80), through: gesture, to: coordinator)
+        XCTAssertEqual(control.selectedSegmentIndex, items.count - 1)
+        send(.ended, at: CGPoint(x: 20, y: 80), through: gesture, to: coordinator)
         XCTAssertEqual(selected, items.last?.tool)
 
         control.setEnabled(false, forSegmentAt: 0)
@@ -152,6 +210,28 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         XCTAssertEqual(control.selectedSegmentIndex, items.count - 1)
         send(.ended, at: otherEnabledSegment, through: gesture, to: coordinator)
         XCTAssertEqual(selected, items.last?.tool)
+    }
+
+    func testExternalSelectionAndReorderSeparatelyInvalidateOutsideCommit() {
+        let items = ExcalidrawToolbarToolPresentation(order: .init()).items
+        var selected: ExcalidrawTool? = .cursor
+        let binding = Binding(get: { selected }, set: { selected = $0 })
+        let (coordinator, control) = makePicker(items: items, selection: binding)
+        let gesture = ScrubInput()
+        control.addGestureRecognizer(gesture)
+
+        send(.began, at: CGPoint(x: 100, y: 22), through: gesture, to: coordinator)
+        selected = .rectangle
+        coordinator.update(control, items: items, selection: binding, size: 20, withFooter: true, scale: 1)
+        send(.ended, at: CGPoint(x: 100, y: 80), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .rectangle, "An external selection wins without a reorder")
+        XCTAssertEqual(control.selectedSegmentIndex, 1)
+
+        send(.began, at: CGPoint(x: 100, y: 22), through: gesture, to: coordinator)
+        let reordered = ExcalidrawToolbarToolPresentation(order: .init(tools: [.laser, .ellipse])).items
+        coordinator.update(control, items: reordered, selection: binding, size: 20, withFooter: true, scale: 1)
+        send(.ended, at: CGPoint(x: 100, y: 80), through: gesture, to: coordinator)
+        XCTAssertEqual(selected, .rectangle, "A reorder alone invalidates the retained contact")
     }
 
     private func makePicker(
