@@ -155,6 +155,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(app.buttons["toolbar.undo"].exists)
         XCTAssertFalse(app.buttons["toolbar.toolLock"].exists)
         XCTAssertFalse(app.buttons["toolbar.protectFile"].exists)
+        assertNativeActionGeometry(in: app)
         XCTAssertGreaterThanOrEqual(menu.frame.width, 44)
         XCTAssertGreaterThanOrEqual(menu.frame.height, 44)
         XCTAssertEqual(menu.frame.midY, control.frame.midY, accuracy: 12)
@@ -246,6 +247,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
         XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let initialFrames = assertNativeActionGeometry(in: app)
         let rectangle = tool(named: "Rectangle", in: control)
         XCTAssertTrue(rectangle.isHittable)
         rectangle.tap()
@@ -256,8 +258,10 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let undo = app.buttons["toolbar.undo"].firstMatch
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: undo)
         XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 5), .completed)
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         undo.tap()
         captureEditorPhase(app, name: "After Undo, inspect rectangle removal")
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         undo.tap()
         let redo = app.buttons["toolbar.redoAction"].firstMatch
         XCTAssertTrue(redo.waitForExistence(timeout: 5), "A tap must open the menu when only Redo is available")
@@ -267,6 +271,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         redo.tap()
         let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: redo)
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed)
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "After Redo, inspect rectangle restoration")
         undo.press(forDuration: 1)
         let undoAction = app.buttons["toolbar.undoAction"].firstMatch
@@ -283,6 +288,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
         XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let initialFrames = assertNativeActionGeometry(in: app)
         let cursor = tool(named: "Selection", in: control)
         cursor.tap()
         assertSelection(cursor, control: control)
@@ -298,6 +304,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(style.isHittable)
         // A fresh app starts with Style shown. Hide it before any panel exists.
         style.tap()
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "Style off with Selection and no panel")
 
         let rectangle = tool(named: "Rectangle", in: control)
@@ -319,16 +326,44 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         )
         unexpectedlyShown.isInverted = true
         XCTAssertEqual(XCTWaiter.wait(for: [unexpectedlyShown], timeout: 2), .completed)
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "New shape selected while Style remains off")
 
         style.tap()
         let shown = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: panel)
         XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 5), .completed)
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "One Style press shows the selected shape panel")
         style.tap()
         let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: panel)
         XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "One more Style press hides the selected shape panel")
+    }
+
+    @discardableResult
+    private func assertNativeActionGeometry(
+        in app: XCUIApplication,
+        matching initialFrames: [String: CGRect]? = nil,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> [String: CGRect] {
+        let picker = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        var frames: [String: CGRect] = [:]
+        for identifier in ["toolbar.undo", "toolbar.style", "toolbar.share", "toolbar.moreTools"] {
+            let button = app.buttons[identifier].firstMatch
+            XCTAssertTrue(button.exists, identifier, file: file, line: line)
+            let frame = button.frame
+            XCTAssertGreaterThanOrEqual(frame.width, 44, identifier, file: file, line: line)
+            XCTAssertGreaterThanOrEqual(frame.height, 44, identifier, file: file, line: line)
+            XCTAssertEqual(frame.midY, picker.frame.midY, accuracy: 12, identifier, file: file, line: line)
+            if let initial = initialFrames?[identifier] {
+                XCTAssertEqual(frame.width, initial.width, accuracy: 0.5, identifier, file: file, line: line)
+                XCTAssertEqual(frame.height, initial.height, accuracy: 0.5, identifier, file: file, line: line)
+            }
+            frames[identifier] = frame
+        }
+        return frames
     }
 
     private func revealMenuAction(_ action: XCUIElement, in app: XCUIApplication) {
