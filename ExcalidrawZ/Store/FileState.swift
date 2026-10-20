@@ -1359,56 +1359,16 @@ final class FileState: ObservableObject {
         return fileID
     }
     
-    @discardableResult
     @MainActor
-    func persistPreparedLibraryCanvasUpdate(
-        _ file: File,
-        with excalidrawFile: ExcalidrawFile
-    ) -> Bool {
+    func prepareLibraryCanvasSaveTarget(_ file: File) -> CapturedCanvasSaveTarget? {
         let activeFile = ActiveFile.file(file)
         guard !file.inTrash,
-              shouldAcceptCanvasUpdate(fileID: activeFile.id, label: file.name ?? "Untitled") else {
-            return false
+              shouldAcceptCanvasUpdate(fileID: activeFile.id, label: file.name ?? "Untitled"),
+              let target = capturedCanvasSaveTarget(for: activeFile) else {
+            return nil
         }
-        let id = file.objectID
-        let suppressCheckpoint = automaticCheckpointWritesSuppressed
-        let newCheckpoint = suppressCheckpoint
-            ? false
-            : shouldCreateUserCheckpoint(for: activeFile)
-        self.didUpdateFileState[activeFile] = true
-        Task.detached {
-            do {
-                guard let content = excalidrawFile.content else { return }
-                
-                // Step 1: Sync media items from ExcalidrawFile (creates new ones and saves to iCloud Drive)
-                _ = try await PersistenceController.shared.mediaItemRepository.syncMediaItemsForFile(
-                    excalidrawFile: excalidrawFile,
-                    fileObjectID: id
-                )
-                
-                // Step 2: Update file elements through repository.
-                // Checkpoint policy: suppress entirely while an AI/MCP
-                // mutation session is active (so automated mutations don't
-                // pollute user history); otherwise fall back to historical
-                // user-edit semantics.
-                let checkpointPolicy: CheckpointWriteOptions = suppressCheckpoint
-                    ? .suppress
-                    : .userEdit(newCheckpoint: newCheckpoint)
-                try await PersistenceController.shared.fileRepository.updateElements(
-                    fileObjectID: id,
-                    fileData: content,
-                    checkpoint: checkpointPolicy
-                )
-                self.logger.debug("File update saved")
-                await MainActor.run {
-                    // already throttled
-                    self.objectWillChange.send()
-                }
-            } catch {
-                self.logger.error("Failed to update file \(file.name ?? "Untitled"): \(error)")
-            }
-        }
-        return true
+        didUpdateFileState[activeFile] = true
+        return target
     }
 
     @MainActor
