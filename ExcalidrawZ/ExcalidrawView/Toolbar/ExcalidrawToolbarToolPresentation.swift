@@ -34,6 +34,27 @@ struct ExcalidrawToolbarToolPresentation {
         )
     }
 
+    var configuredDirectItems: [Item] {
+        Array(items.prefix(order.directToolCount))
+    }
+
+    var configuredOverflowItems: [Item] {
+        Array(items.dropFirst(order.directToolCount))
+    }
+
+    func configuredPickerItems(
+        for sizeClass: ExcalidrawToolbarToolSizeClass
+    ) -> (primary: [Item], secondary: [Item]) {
+        let count: Int
+        switch sizeClass {
+            case .dense, .compact:
+                count = min(6, order.directToolCount)
+            case .regular, .expanded:
+                count = order.directToolCount
+        }
+        return (Array(items.prefix(count)), Array(items.dropFirst(count)))
+    }
+
     var compactItems: [Item] {
         items.filter {
             switch $0.tool {
