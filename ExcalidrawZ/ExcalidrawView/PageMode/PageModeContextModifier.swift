@@ -1,5 +1,4 @@
 import Combine
-import Logging
 import SwiftUI
 
 @MainActor
@@ -29,8 +28,11 @@ private struct PageModeContextHost: View {
     @State private var owner: CanvasMutationSession?
 
     var body: some View {
-        GeometryReader { geometry in
-            if let controller, available {
+        // Read context state in this body, before the deferred layout closure.
+        let contextController = controller
+        let canShowContext = available
+        return GeometryReader { geometry in
+            if let controller = contextController, canShowContext {
                 PageModeContextActions(controller: controller, selectedIDs: core.selectedElementIDs,
                     scroll: CGPoint(x: core.cameraState.scrollX, y: core.cameraState.scrollY),
                     zoom: core.cameraState.zoom,
@@ -79,9 +81,6 @@ private struct PageModeContextHost: View {
 
     /// Coalesces reads through cancellation. A running page action keeps its busy controller.
     private func refresh() {
-#if DEBUG
-        trace("refresh")
-#endif
         refreshTask?.cancel()
         guard available else { clear(); return }
         guard controller?.isBusy != true else { return }
@@ -92,9 +91,6 @@ private struct PageModeContextHost: View {
                     fileState: fileState, lockedContentState: lockedContentState).makeController()
                 let nextOwner = core.documentSyncController.captureCanvasMutationSession()
                 let didRead = await next.perform(.init(action: .list))
-#if DEBUG
-                trace("list success=\(didRead) pages=\(next.pages.count) selectedPage=\(next.pages.contains { selectedIDs.contains($0.id) }) cancelled=\(Task.isCancelled)")
-#endif
                 guard didRead, !Task.isCancelled,
                       available, core.selectedElementIDs == selectedIDs,
                       let nextOwner, core.documentSyncController.isCurrentCanvasMutationSession(nextOwner),
@@ -103,20 +99,11 @@ private struct PageModeContextHost: View {
                 controller = next
                 owner = nextOwner
             } catch {
-#if DEBUG
-                trace("read error=\(error.localizedDescription)")
-#endif
                 // A context read has no user action to fail. An unavailable owner hides it.
                 if !Task.isCancelled { clear() }
             }
         }
     }
-
-#if DEBUG
-    private func trace(_ stage: String) {
-        core.logger.debug("[PageModeContext] \(stage) active=\(scenePhase == .active) loading=\(core.isLoading) activeCore=\(toolState.excalidrawWebCoordinator === core) locked=\(lockedContentState.activeFileLockState == .locked) selected=\(core.selectedElementIDs.count) ownerCurrent=\(owner.map { core.documentSyncController.isCurrentCanvasMutationSession($0) } ?? true) camera=\(core.cameraState.scrollX),\(core.cameraState.scrollY),\(core.cameraState.zoom)")
-    }
-#endif
 }
 
 @MainActor
@@ -130,17 +117,11 @@ private struct PageModeContextActions: View {
     @State private var controlsHeight: CGFloat = 52
 
     var body: some View {
-#if DEBUG
-        let _ = Logger(label: "PageModeContext").debug("actions valid=\(controller.isValid) selected=\(selectedIDs.count) pages=\(controller.pages.count) viewport=\(viewport) controlsHeight=\(controlsHeight)")
-#endif
         if controller.isValid, selectedIDs.count == 1,
            let page = controller.pages.first(where: { $0.id == selectedIDs[0] }), !page.locked {
             let size = CGSize(width: min(280, viewport.width - 16), height: controlsHeight)
             let origin = PageModeContextPlacement.origin(page: page, scroll: scroll,
                 zoom: zoom, viewport: viewport, controls: size)
-#if DEBUG
-            let _ = Logger(label: "PageModeContext").debug("placement visible=\(origin != nil) page=\(page.x ?? .nan),\(page.y ?? .nan),\(page.width),\(page.height) scroll=\(scroll) zoom=\(zoom) viewport=\(viewport) controls=\(size)")
-#endif
             if let origin {
                 VStack(alignment: .trailing, spacing: 4) {
                     HStack(spacing: 8) {
