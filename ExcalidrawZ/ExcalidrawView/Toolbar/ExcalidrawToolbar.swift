@@ -77,7 +77,7 @@ struct ExcalidrawToolbar: View {
 
         leadingTollsContent()
 #if os(iOS)
-            .excalidrawToolbarSurface(.circle)
+            .excalidrawToolbarSurface(.circle, padded: !usesCombinedToolsMenu)
 #endif
         ExcalidrawToolbarToolContainer { sizeClass in
             let presentation = ExcalidrawToolbarToolPresentation(order: toolOrder)
@@ -129,7 +129,7 @@ struct ExcalidrawToolbar: View {
                     overflowItems: sizeClass == .dense ? presentation.items : pickerItems.secondary,
                     usesPrincipalLabel: true
                 )
-                .excalidrawToolbarSurface(.circle)
+                .excalidrawToolbarSurface(.circle, padded: false)
             }
 #endif
         }
@@ -158,7 +158,7 @@ struct ExcalidrawToolbar: View {
             }
             .apply { label in
                 if usesCombinedToolsMenu {
-                    label.labelStyle(.iconOnly).frame(width: 32, height: 32)
+                    label.labelStyle(.iconOnly).frame(width: 44, height: 44).contentShape(Circle())
                 } else {
                     label
                 }
@@ -802,11 +802,12 @@ private struct ExcalidrawToolbarSurfaceModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     
     let shape: ExcalidrawToolbarSurfaceShape
+    var padded = true
     
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, shape.horizontalPadding)
-            .padding(.vertical, shape.verticalPadding)
+            .padding(.horizontal, padded ? shape.horizontalPadding : 0)
+            .padding(.vertical, padded ? shape.verticalPadding : 0)
             .background {
                 surfaceBackground
             }
@@ -869,8 +870,8 @@ private struct ExcalidrawToolbarSurfaceModifier: ViewModifier {
 }
 
 private extension View {
-    func excalidrawToolbarSurface(_ shape: ExcalidrawToolbarSurfaceShape) -> some View {
-        modifier(ExcalidrawToolbarSurfaceModifier(shape: shape))
+    func excalidrawToolbarSurface(_ shape: ExcalidrawToolbarSurfaceShape, padded: Bool = true) -> some View {
+        modifier(ExcalidrawToolbarSurfaceModifier(shape: shape, padded: padded))
     }
 }
 #endif
