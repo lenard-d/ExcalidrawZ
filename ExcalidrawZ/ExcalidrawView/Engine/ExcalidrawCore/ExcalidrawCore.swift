@@ -101,6 +101,19 @@ class ExcalidrawCore: NSObject, ObservableObject {
         }
     }
     
+    static func orderedToolbarTool(
+        for key: ExcalidrawWebView.ToolbarActionKey, in order: ExcalidrawToolbarToolOrder
+    ) -> ExcalidrawTool? {
+        switch key {
+            case .number(let number):
+                return order.tool(forShortcutNumber: number)
+            case .alternateNumber(let number):
+                return order.tool(forShortcutNumber: number, alternate: true)
+            default:
+                return nil
+        }
+    }
+
     func configWebView() {
         logger.info("Configure Web View...")
         let config = WKWebViewConfiguration()
@@ -133,22 +146,16 @@ class ExcalidrawCore: NSObject, ObservableObject {
         ) { key in
             switch key {
                 case .number(let int), .alternateNumber(let int):
-                    let alternate: Bool
-                    if case .alternateNumber = key {
-                        alternate = true
-                    } else {
-                        alternate = false
-                    }
                     Task { @MainActor in
                         let toolOrder = self.parent?.appPreference.toolbarToolOrder
                             ?? ExcalidrawToolbarToolOrder()
-                        if let tool = toolOrder.tool(forShortcutNumber: int, alternate: alternate) {
+                        if let tool = Self.orderedToolbarTool(for: key, in: toolOrder) {
                             guard let toolState = self.parent?.toolState,
                                   toolState.excalidrawWebCoordinator === self else {
                                 return
                             }
                             try? await toolState.toggleTool(tool)
-                        } else if self.parent == nil, !alternate {
+                        } else if self.parent == nil, case .number = key {
                             try? await self.toggleToolbarAction(key: int)
                         }
                     }
