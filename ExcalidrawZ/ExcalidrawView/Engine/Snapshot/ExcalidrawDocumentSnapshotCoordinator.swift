@@ -39,8 +39,8 @@ protocol ExcalidrawDocumentSnapshotCoordinatorDelegate: AnyObject {
 final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
     private weak var delegate: ExcalidrawDocumentSnapshotCoordinatorDelegate?
 
-    private lazy var contentScheduler = ExcalidrawDocumentContentSnapshotScheduler { [weak self] in
-        await self?.commitScheduledDirtySnapshot()
+    private lazy var contentScheduler = ExcalidrawDocumentContentSnapshotScheduler { [weak self] state in
+        await self?.commitScheduledDirtySnapshot(state)
     }
     private let appStateSaver = ExcalidrawDocumentAppStateSnapshotSaver()
     private let programmaticCommitter = ExcalidrawDocumentProgrammaticSnapshotCommitter()
@@ -105,6 +105,10 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
     }
 
     func waitForOwnedCanvasOperations() async -> Bool { await programmaticCommitter.waitUntilIdle() }
+
+    func requestCompletedContentCommit(fileID: String, revision: Int) {
+        contentScheduler.requestCompletedContentCommit(fileID: fileID, revision: revision)
+    }
 
     @MainActor
     func performOwnedCanvasMutation(
@@ -172,10 +176,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         )
     }
 
-    private func commitScheduledDirtySnapshot() async {
-        guard let commitState = contentScheduler.takeScheduledCommitState() else {
-            return
-        }
+    private func commitScheduledDirtySnapshot(_ commitState: ExcalidrawDocumentContentSnapshotScheduler.CommitState) async {
         defer {
             contentScheduler.completeScheduledCommit()
         }

@@ -377,6 +377,7 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
 
     struct StateChangedAdmission {
         let capture: CanvasSaveCapture?
+        let completionSession: CanvasMutationSession?
     }
 
     /// WebKit calls this before creating the asynchronous save task.
@@ -389,7 +390,10 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
         }
         let intent: CanvasSaveCoverage = data.fileData != nil || data.metadata?.shouldPullContentSnapshot == true
             ? .fullScene : .appState
-        return StateChangedAdmission(capture: isDirty ? core.parent?.fileState.captureCanvasSave(intent: intent) : nil)
+        return StateChangedAdmission(
+            capture: isDirty ? core.parent?.fileState.captureCanvasSave(intent: intent) : nil,
+            completionSession: data.metadata?.completedContentRevision != nil ? captureCanvasMutationSession() : nil
+        )
     }
 
     @MainActor
@@ -414,6 +418,16 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
                 savingType: core.parent?.savingType,
                 capture: capture
             )
+            if let completedRevision = metadata.completedContentRevision,
+               completedRevision >= 0,
+               let revision = metadata.revision, completedRevision <= revision,
+               let session = admission.completionSession,
+               metadata.currentFileId == session.fileID,
+               isCurrentCanvasMutationSession(session) {
+                snapshotCoordinator.requestCompletedContentCommit(
+                    fileID: session.fileID, revision: completedRevision
+                )
+            }
             return
         }
 

@@ -10,6 +10,130 @@ import XCTest
 /// Requires the isolated simulator app host. The inline page replaces only the web application.
 final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
     @MainActor
+    func testCompletionHintKeepsHeldFullSaveCurrentUntilItsRealReceipt() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let core = try XCTUnwrap(fixture.core)
+        let controller = core.documentSyncController
+        // Establish the ordinary scheduler's previous start through the real public route.
+        try await fixture.setScene(1)
+        try await fixture.recordDirtyScene()
+        let initial = Task {
+            while controller.hasPendingDirtySnapshot { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        fixture.cancelOnClose(initial)
+        try await boundedSaveTestValue(initial)
+
+        let held = LibrarySaveControl(phase: .afterStorage)
+        addTeardownBlock { await held.release() }
+        try await fixture.install(held)
+        try await fixture.setScene(2)
+        try await fixture.recordDirtyScene()
+        try await fixture.reportContentCompletion(2)
+        try await held.waitUntilPaused()
+        XCTAssertTrue(controller.hasPendingDirtySnapshot)
+        XCTAssertTrue(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
+        let disk = try await fixture.libraryElementIDs()
+        XCTAssertEqual(disk, ["revision-2"])
+
+        // A duplicate timing-only notification must not replace the held capture's admission.
+        try await fixture.reportContentCompletion(2)
+        await held.release()
+        let finished = Task {
+            while controller.hasPendingDirtySnapshot { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        fixture.cancelOnClose(finished)
+        try await boundedSaveTestValue(finished)
+        XCTAssertFalse(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
+        let confirmed = try await fixture.libraryElementIDs()
+        XCTAssertEqual(confirmed, ["revision-2"])
+    }
+
+    @MainActor
+    func testFailedCompletionSaveRetainsLatestContentForCompletionRetry() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let core = try XCTUnwrap(fixture.core)
+        let controller = core.documentSyncController
+        let reported = expectation(description: "The actual storage failure stays visible")
+        var errors: [NSError] = []
+        core.publishError = {
+            errors.append($0 as NSError)
+            if errors.count == 1 { reported.fulfill() }
+        }
+        try await fixture.installFailure()
+        try await fixture.setScene(2)
+        try await fixture.recordDirtyScene()
+        try await fixture.reportContentCompletion(2)
+        await fulfillment(of: [reported], timeout: 2)
+        XCTAssertTrue(controller.hasPendingDirtySnapshot)
+        XCTAssertTrue(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
+        XCTAssertTrue(errors.contains { $0.domain == NSCocoaErrorDomain && $0.code == CocoaError.fileWriteNoPermission.rawValue })
+        let unchanged = try await fixture.libraryElementIDs()
+        XCTAssertEqual(unchanged, [])
+        try await fixture.clearControl()
+        try await fixture.setScene(3)
+        try await fixture.recordDirtyScene()
+        try await fixture.reportContentCompletion(3)
+        let retried = Task {
+            while controller.hasPendingDirtySnapshot { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        fixture.cancelOnClose(retried)
+        try await boundedSaveTestValue(retried)
+        let latest = try await fixture.libraryElementIDs()
+        XCTAssertEqual(latest, ["revision-3"])
+        XCTAssertFalse(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
+    }
+
+    @MainActor
+    func testCompletionHintForCleanSceneDoesNotCreatePendingWorkOrPullSnapshot() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let core = try XCTUnwrap(fixture.core)
+        let before = try await fixture.integer("window.snapshotReads")
+        let externalRevision = core.documentSyncController.externalReloadRevision
+        try await fixture.reportContentCompletion(1)
+        XCTAssertFalse(core.documentSyncController.hasPendingDirtySnapshot)
+        XCTAssertEqual(core.documentSyncController.externalReloadRevision, externalRevision)
+        let after = try await fixture.integer("window.snapshotReads")
+        XCTAssertEqual(after, before)
+    }
+
+    @MainActor
+    func testCompletionAdmittedBeforeSameFileReloadCannotAdvanceReplacementSession() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let core = try XCTUnwrap(fixture.core)
+        let controller = core.documentSyncController
+        let original = try XCTUnwrap(controller.captureCanvasMutationSession())
+        let metadata = try JSONDecoder().decode(ExcalidrawCore.StateChangedMetadata.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "revision": 2, "completedContentRevision": 2,
+                "contentDirty": false, "appStateDirty": false,
+                "currentFileId": original.fileID
+            ]))
+        let oldMessage = ExcalidrawCore.StateChangedMessageData(state: nil, fileData: nil, metadata: metadata)
+        let oldAdmission = try XCTUnwrap(controller.admitStateChanged(oldMessage))
+        let result = await controller.load(fixture.model.file, force: true)
+        XCTAssertTrue(result.didLoad)
+        let replacement = try XCTUnwrap(controller.captureCanvasMutationSession())
+        XCTAssertEqual(replacement.fileID, original.fileID)
+        XCTAssertGreaterThan(replacement.loadGeneration, original.loadGeneration)
+        XCTAssertFalse(controller.isCurrentCanvasMutationSession(original))
+
+        try await fixture.setScene(2)
+        try await fixture.recordDirtyScene()
+        let before = try await fixture.integer("window.snapshotReads")
+        await controller.save(oldMessage, admission: oldAdmission)
+        // The ordinary first snapshot waits one second. A stale completion must not advance it.
+        try await Task.sleep(for: .milliseconds(200))
+        let after = try await fixture.integer("window.snapshotReads")
+        XCTAssertEqual(after, before)
+        XCTAssertTrue(controller.hasPendingDirtySnapshot)
+        XCTAssertTrue(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
+    }
+
+    @MainActor
     func testPublicForcedLoadInvalidatesCapturedSessionAndBroadcastsToBothSubscribers() async throws {
         let fixture = try await CanvasControllerFixture.open()
         addTeardownBlock { await fixture.close() }
@@ -693,6 +817,18 @@ private final class CanvasControllerFixture {
     func recordDirtyScene() async throws {
         let metadata = try JSONDecoder().decode(ExcalidrawCore.StateChangedMetadata.self,
             from: Data("{\"revision\":\(try await integer("window.sceneRevision")),\"contentDirty\":true}".utf8))
+        let message = ExcalidrawCore.StateChangedMessageData(state: nil, fileData: nil, metadata: metadata)
+        let admission = try XCTUnwrap(core.documentSyncController.admitStateChanged(message))
+        await core.documentSyncController.save(message, admission: admission)
+    }
+
+    func reportContentCompletion(_ revision: Int) async throws {
+        let metadata = try JSONDecoder().decode(ExcalidrawCore.StateChangedMetadata.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "revision": revision, "completedContentRevision": revision,
+                "contentDirty": false, "appStateDirty": false,
+                "currentFileId": try XCTUnwrap(model.file?.id)
+            ]))
         let message = ExcalidrawCore.StateChangedMessageData(state: nil, fileData: nil, metadata: metadata)
         let admission = try XCTUnwrap(core.documentSyncController.admitStateChanged(message))
         await core.documentSyncController.save(message, admission: admission)

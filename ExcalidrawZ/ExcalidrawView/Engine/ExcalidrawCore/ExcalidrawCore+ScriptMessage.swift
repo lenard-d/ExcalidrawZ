@@ -1022,6 +1022,8 @@ extension ExcalidrawCore {
         var appStateKeyCount: Int?
         var appStateChars: Int?
         var currentFileId: String?
+        /// Timing hint for previously reported content, never a writer receipt.
+        var completedContentRevision: Int?
 
         var hasDirtySplitFields: Bool {
             contentDirty != nil || appStateDirty != nil

@@ -8,13 +8,13 @@
 import Foundation
 
 final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
-    struct CommitState {
+    struct CommitState: Sendable {
         let expectedFileID: String?
         let expectedRevision: Int?
     }
 
     private let lock = NSLock()
-    private let onScheduledCommit: @Sendable () async -> Void
+    private let onScheduledCommit: @Sendable (CommitState) async -> Void
 
     private var commitTask: Task<Void, Never>?
     private var isCommitInFlight = false
@@ -23,11 +23,13 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
     private var pendingFileID: String?
     private var hasPendingWithoutRevision = false
     private var lastCommitStartedAt: Date?
+    private var completedContentRevision: Int?
+    private var scheduledGeneration: UInt64 = 0
 
     private let initialDelayNanoseconds: UInt64 = 1_000_000_000
     private let throttleIntervalNanoseconds: UInt64 = 5_000_000_000
 
-    init(onScheduledCommit: @escaping @Sendable () async -> Void) {
+    init(onScheduledCommit: @escaping @Sendable (CommitState) async -> Void) {
         self.onScheduledCommit = onScheduledCommit
     }
 
@@ -41,6 +43,8 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         pendingFileID = nil
         hasPendingWithoutRevision = false
         lastCommitStartedAt = nil
+        completedContentRevision = nil
+        scheduledGeneration &+= 1
         lock.unlock()
     }
 
@@ -65,6 +69,8 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         hasPendingWithoutRevision = false
         commitTask?.cancel()
         commitTask = nil
+        completedContentRevision = nil
+        scheduledGeneration &+= 1
         lock.unlock()
     }
 
@@ -78,6 +84,12 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
             latestStateRevision = expectedRevision
             pendingRevision = expectedRevision
             hasPendingWithoutRevision = false
+            if let completedContentRevision, expectedRevision > completedContentRevision {
+                self.completedContentRevision = nil
+                commitTask?.cancel()
+                commitTask = nil
+                scheduledGeneration &+= 1
+            }
         } else if pendingRevision == nil {
             if let latestStateRevision {
                 pendingRevision = latestStateRevision
@@ -90,6 +102,20 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Advances existing pending content after the web editor reports a quiet, finalized scene.
+    /// An in-flight save keeps its real outcome; its completion schedules the remaining revision.
+    func requestCompletedContentCommit(fileID: String, revision: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard pendingFileID == fileID,
+              let pendingRevision, revision >= pendingRevision else { return }
+        completedContentRevision = max(completedContentRevision ?? revision, revision)
+        guard !isCommitInFlight else { return }
+        commitTask?.cancel()
+        commitTask = nil
+        scheduleCommitIfNeededLocked()
+    }
+
     func hasPendingDirtySnapshot() -> Bool {
         lock.lock()
         let hasPending = pendingRevision != nil || hasPendingWithoutRevision
@@ -99,10 +125,15 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
 
     func takeScheduledCommitState() -> CommitState? {
         lock.lock()
+        defer { lock.unlock() }
+        return takeScheduledCommitStateLocked()
+    }
+
+    private func takeScheduledCommitStateLocked() -> CommitState? {
+        guard !isCommitInFlight else { return nil }
         let shouldCommit = pendingRevision != nil || hasPendingWithoutRevision
         guard shouldCommit else {
             commitTask = nil
-            lock.unlock()
             return nil
         }
 
@@ -113,7 +144,8 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         commitTask = nil
         isCommitInFlight = true
         lastCommitStartedAt = Date()
-        lock.unlock()
+        completedContentRevision = nil
+        scheduledGeneration &+= 1
         return state
     }
 
@@ -141,6 +173,7 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         )
         commitTask?.cancel()
         commitTask = nil
+        scheduledGeneration &+= 1
         lock.unlock()
         return state
     }
@@ -174,7 +207,10 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         pendingRevision = nil
         pendingFileID = nil
         hasPendingWithoutRevision = false
+        completedContentRevision = nil
+        commitTask?.cancel()
         commitTask = nil
+        scheduledGeneration &+= 1
         if let committedRevision {
             latestStateRevision = committedRevision
         }
@@ -186,10 +222,13 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
               commitTask == nil else {
             return
         }
-        commitTask = makeCommitTask(delay: commitDelayLocked())
+        scheduledGeneration &+= 1
+        commitTask = makeCommitTask(delay: commitDelayLocked(), generation: scheduledGeneration)
     }
 
     private func commitDelayLocked() -> UInt64 {
+        if let completedContentRevision, let pendingRevision,
+           completedContentRevision >= pendingRevision { return 0 }
         guard let lastCommitStartedAt else {
             return initialDelayNanoseconds
         }
@@ -200,14 +239,18 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         return UInt64(remaining * 1_000_000_000)
     }
 
-    private func makeCommitTask(delay: UInt64) -> Task<Void, Never> {
+    private func makeCommitTask(delay: UInt64, generation: UInt64) -> Task<Void, Never> {
         Task { [onScheduledCommit] in
             do {
                 if delay > 0 {
                     try await Task.sleep(nanoseconds: delay)
                     try Task.checkCancellation()
                 }
-                await onScheduledCommit()
+                let state = lock.withLock { () -> CommitState? in
+                    guard generation == scheduledGeneration else { return nil }
+                    return takeScheduledCommitStateLocked()
+                }
+                if let state { await onScheduledCommit(state) }
             } catch {
                 return
             }
