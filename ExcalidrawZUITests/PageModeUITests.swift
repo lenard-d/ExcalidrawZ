@@ -41,6 +41,14 @@ final class PageModeUITests: XCTestCase {
         capture(app, step: "Tagged page after writing, inspect video for blue border during contact")
     }
 
+    func testExploreSyntheticDrawingTitleMenu() throws {
+        let app = try openSyntheticDrawing()
+        let more = app.navigationBars.buttons["More"].firstMatch
+        try requireHittable(more, in: app, step: "Exact current synthetic drawing title menu")
+        more.tap()
+        capture(app, step: "STOP: current synthetic drawing title menu before rename")
+    }
+
     func testExploreSyntheticPageDuplicateAndReopenRoute() throws {
         let app = try openSyntheticDrawing()
         try selectTool("Rectangle", in: app)
