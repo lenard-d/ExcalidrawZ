@@ -86,6 +86,8 @@ struct ExcalidrawSettingsView: View {
                     }
                 } label: {
                     Label("Add tool", systemImage: "plus")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("settings.toolbar.addTool")
             }
