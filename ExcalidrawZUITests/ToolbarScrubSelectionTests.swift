@@ -243,6 +243,59 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 5))
     }
 
+    func testExploreCommandFAndSharePresentation() {
+        let app = openSyntheticDrawing()
+        let share = app.buttons["toolbar.share"].firstMatch
+        guard share.waitForExistence(timeout: 15), share.isHittable else {
+            captureEditorPhase(app, name: "STOP Share control unavailable")
+            XCTFail("The observed native Share control must be available")
+            return
+        }
+        captureEditorPhase(app, name: "Before Command-F with secondary menu closed")
+        app.typeKey("f", modifierFlags: .command)
+        let searchOpened = app.textFields.firstMatch.waitForExistence(timeout: 5)
+        captureEditorPhase(app, name: "After Command-F, inspect Search inspector")
+        guard searchOpened else {
+            XCTFail("Command-F must open the observed Search text field")
+            return
+        }
+        guard share.isHittable else {
+            captureEditorPhase(app, name: "STOP Share unavailable after Command-F")
+            XCTFail("Share must remain accessible with Search open")
+            return
+        }
+        share.tap()
+        captureEditorPhase(app, name: "STOP after Share tap, inspect presentation before choosing a route")
+    }
+
+    func testExploreFileProtectionPresentation() {
+        let app = openSyntheticDrawing()
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        guard menu.waitForExistence(timeout: 15), menu.isHittable else {
+            captureEditorPhase(app, name: "STOP secondary menu unavailable for file protection")
+            XCTFail("The observed secondary menu must be available")
+            return
+        }
+        menu.tap()
+        let protection = app.buttons["toolbar.protectFile"].firstMatch
+        let menuContent = app.collectionViews.containing(.button, identifier: "toolbar.zoom").firstMatch
+        guard protection.waitForExistence(timeout: 3), menuContent.exists else {
+            captureEditorPhase(app, name: "STOP file protection route unavailable")
+            XCTFail("The observed protection action and its containing menu must exist")
+            return
+        }
+        for _ in 0..<4 where !protection.isHittable {
+            menuContent.swipeUp()
+        }
+        guard protection.isHittable else {
+            captureEditorPhase(app, name: "STOP file protection action cannot be reached")
+            XCTFail("The secondary menu must scroll to file protection")
+            return
+        }
+        protection.tap()
+        captureEditorPhase(app, name: "STOP after file protection tap, inspect prompt before cancellation")
+    }
+
     func testUndoThenTapOpensRedoMenu() {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch

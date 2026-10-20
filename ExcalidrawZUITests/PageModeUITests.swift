@@ -151,6 +151,7 @@ final class PageModeUITests: XCTestCase {
         launchedApp = app
         XCUIDevice.shared.orientation = .landscapeLeft
         app.launch()
+        dismissObservedWhatsNew(in: app)
         let showSidebar = app.buttons["Show Sidebar"].firstMatch
         if showSidebar.exists && showSidebar.isHittable { showSidebar.tap() }
         let home = app.buttons["Home"].firstMatch
@@ -159,12 +160,12 @@ final class PageModeUITests: XCTestCase {
         capture(app, step: "Home before process restart, known synthetic duplicate retained")
         app.terminate()
         app.launch()
+        dismissObservedWhatsNew(in: app)
         let reopenSidebar = app.buttons["Show Sidebar"].firstMatch
         if reopenSidebar.exists && reopenSidebar.isHittable { reopenSidebar.tap() }
         // This exact name was created and captured by the prior public duplicate run.
-        let savedDrawing = app.scrollViews.containing(.button, identifier: "Home")
-            .staticTexts["Pages-Duplicate-DDB10D13"].firstMatch
-        try requireHittable(savedDrawing, in: app, step: "Exact synthetic drawing in observed sidebar ScrollView")
+        let savedDrawing = app.staticTexts["Pages-Duplicate-DDB10D13"].firstMatch
+        try requireHittable(savedDrawing, in: app, step: "Exact synthetic drawing in observed Home recent list")
         savedDrawing.tap()
         try selectTool("Selection", in: app)
         try openPages(in: app)
@@ -181,6 +182,21 @@ final class PageModeUITests: XCTestCase {
         try requireHittable(exportPDF, in: app, step: "Normal PDF export for reopened synthetic duplicate")
         exportPDF.tap()
         capture(app, step: "STOP: actual PDF save dialog for reopened synthetic duplicate")
+    }
+
+    private func dismissObservedWhatsNew(in app: XCUIApplication) {
+        let whatsNew = app.navigationBars.matching(
+            NSPredicate(format: "identifier IN %@", ["What's New", "What’s New in ExcalidrawZ"])
+        ).firstMatch
+        if whatsNew.waitForExistence(timeout: 5) {
+            let close = whatsNew.buttons["Close"].firstMatch
+            XCTAssertTrue(close.isHittable)
+            close.tap()
+            let dismissed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: whatsNew
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        }
     }
 
     func testSyntheticPageContextLayoutsAndBothAddDirections() throws {
