@@ -165,6 +165,13 @@ final class PageModeUITests: XCTestCase {
         if reopenSidebar.exists && reopenSidebar.isHittable { reopenSidebar.tap() }
         // This exact name was created and captured by the prior public duplicate run.
         let savedDrawing = app.staticTexts["Pages-Duplicate-DDB10D13"].firstMatch
+        let recentLists = app.scrollViews.containing(.staticText, identifier: "Pages-Duplicate-DDB10D13")
+            .allElementsBoundByIndex
+        if let recentList = recentLists.min(by: { $0.frame.height < $1.frame.height }) {
+            for _ in 0..<6 where !savedDrawing.isHittable {
+                recentList.swipeLeft(velocity: .slow)
+            }
+        }
         try requireHittable(savedDrawing, in: app, step: "Exact synthetic drawing in observed Home recent list")
         savedDrawing.tap()
         try selectTool("Selection", in: app)

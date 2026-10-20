@@ -307,15 +307,33 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         captureEditorPhase(app, name: "File protection cancelled, editor restored")
     }
 
-    func testExploreShareWithoutSearchPrerequisite() {
+    func testShareMenuDismissesAndReturnsToEditor() {
         let app = openSyntheticDrawing()
         let share = app.buttons["toolbar.share"].firstMatch
         XCTAssertTrue(share.waitForExistence(timeout: 15))
         XCTAssertTrue(share.isHittable)
         captureEditorPhase(app, name: "Settled B1 toolbar before independent Share")
         share.tap()
-        // Capture the public menu before selecting an unobserved export route.
-        captureEditorPhase(app, name: "STOP independent Share menu before choosing destination")
+        let image = app.buttons["Image"].firstMatch
+        let file = app.buttons["File"].firstMatch
+        let pdf = app.buttons["PDF"].firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        XCTAssertTrue(image.isHittable)
+        XCTAssertTrue(file.isHittable)
+        XCTAssertTrue(pdf.isHittable)
+        captureEditorPhase(app, name: "Share presents the observed Image, File and PDF menu")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !image.exists && !file.exists && !pdf.exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        XCTAssertTrue(share.isHittable)
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        let cursor = tool(named: "Selection", in: control)
+        XCTAssertTrue(cursor.isHittable)
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        captureEditorPhase(app, name: "Share menu dismissed, editor responds to Selection")
     }
 
     func testUndoThenTapOpensRedoMenu() {
