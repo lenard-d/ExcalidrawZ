@@ -69,7 +69,7 @@ struct ExcalidrawSettingsView: View {
             ForEach(Array(editingToolbarToolOrder.tools.prefix(editingToolbarToolOrder.directToolCount)), id: \.self) { tool in
                 ToolbarToolOrderRow(
                     tool: tool,
-                    shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool),
+                    shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool, includingAlternate: true),
                     showsDragHandle: false
                 )
             }
@@ -93,7 +93,7 @@ struct ExcalidrawSettingsView: View {
             ForEach(editingToolbarToolOrder.tools, id: \.self) { tool in
                 ToolbarToolOrderRow(
                     tool: tool,
-                    shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool),
+                    shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool, includingAlternate: true),
                     showsDragHandle: true
                 )
                 .onDrag {
@@ -102,7 +102,7 @@ struct ExcalidrawSettingsView: View {
                 } preview: {
                     ToolbarToolOrderDragPreview(
                         tool: tool,
-                        shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool)
+                        shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool, includingAlternate: true)
                     )
                 }
                 .onDrop(
@@ -152,7 +152,7 @@ struct ExcalidrawSettingsView: View {
                 ForEach(extraToolbarTools, id: \.self) { tool in
                     ToolbarToolOrderRow(
                         tool: tool,
-                        shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool),
+                        shortcutLabel: editingToolbarToolOrder.shortcutLabel(for: tool, includingAlternate: true),
                         showsDragHandle: false
                     )
                 }
