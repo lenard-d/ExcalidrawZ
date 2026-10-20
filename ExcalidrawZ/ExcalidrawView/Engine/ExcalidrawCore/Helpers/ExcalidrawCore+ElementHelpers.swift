@@ -8,6 +8,38 @@
 import Foundation
 
 extension ExcalidrawCore {
+    /// Registers document work before the bridge can suspend. Previews and collaboration own no local document save.
+    @MainActor
+    func callOwnedCanvasMutation(
+        _ script: String,
+        arguments: [String: Any] = [:],
+        reason: String
+    ) async throws -> Any? {
+        try Task.checkCancellation()
+        if parent == nil || parent?.type == .collaboration {
+            return try await webView.callAsyncJavaScript(script, arguments: arguments, contentWorld: .page)
+        }
+
+        var result: Any?
+        try await documentSyncController.performOwnedCanvasMutation(reason: reason) { session in
+            guard !self.isLoading, !self.webView.isLoading else { throw CancellationError() }
+            var ownedArguments = arguments
+            ownedArguments["expectedFileID"] = session.fileID
+            result = try await self.webView.callAsyncJavaScript(
+                """
+                if (!window.excalidrawZHelper?._api ||
+                    window.excalidrawZHelper.currentFileId !== expectedFileID) {
+                    throw new Error("The canvas document changed.");
+                }
+                \(script)
+                """,
+                arguments: ownedArguments,
+                contentWorld: .page
+            )
+        }
+        return result
+    }
+
     @MainActor
     func getSelectedElementIDs() async throws -> [String] {
         let result = try await webView.callAsyncJavaScript(
@@ -29,12 +61,10 @@ extension ExcalidrawCore {
         guard !self.webView.isLoading else { return }
         let elementsJSON = try encodeJSON(elements)
         let optionsJSON = try encodeJSON(options)
-        _ = try await webView.callAsyncJavaScript(
+        _ = try await callOwnedCanvasMutation(
             "window.excalidrawZHelper.replaceAllElements(\(elementsJSON), \(optionsJSON));",
-            arguments: [:],
-            contentWorld: .page
+            reason: "replaceAllElements"
         )
-        documentSyncController.scheduleProgrammaticMutationCommit(reason: "replaceAllElements")
     }
 
     @MainActor
@@ -44,7 +74,7 @@ extension ExcalidrawCore {
     ) async throws {
         guard !self.webView.isLoading else { return }
         let optionsJSON = try encodeJSON(options)
-        _ = try await webView.callAsyncJavaScript(
+        _ = try await callOwnedCanvasMutation(
             """
             const elements = JSON.parse(elementsJSON);
             const options = JSON.parse(optionsJSON);
@@ -54,9 +84,8 @@ extension ExcalidrawCore {
                 "elementsJSON": elementsJSON,
                 "optionsJSON": optionsJSON
             ],
-            contentWorld: .page
+            reason: "replaceAllElementsRaw"
         )
-        documentSyncController.scheduleProgrammaticMutationCommit(reason: "replaceAllElementsRaw")
     }
 
     @MainActor
@@ -83,35 +112,29 @@ extension ExcalidrawCore {
     func addElements(_ elements: [ExcalidrawElement]) async throws {
         guard !self.webView.isLoading, !elements.isEmpty else { return }
         let elementsJSON = try encodeJSON(elements)
-        _ = try await webView.callAsyncJavaScript(
+        _ = try await callOwnedCanvasMutation(
             "window.excalidrawZHelper.addElements(\(elementsJSON));",
-            arguments: [:],
-            contentWorld: .page
+            reason: "addElements"
         )
-        documentSyncController.scheduleProgrammaticMutationCommit(reason: "addElements")
     }
 
     @MainActor
     func updateElements(_ operations: [UpdateElementOperation]) async throws {
         guard !self.webView.isLoading, !operations.isEmpty else { return }
         let operationsJSON = try encodeJSON(operations)
-        _ = try await webView.callAsyncJavaScript(
+        _ = try await callOwnedCanvasMutation(
             "window.excalidrawZHelper.updateElements(\(operationsJSON));",
-            arguments: [:],
-            contentWorld: .page
+            reason: "updateElements"
         )
-        documentSyncController.scheduleProgrammaticMutationCommit(reason: "updateElements")
     }
 
     @MainActor
     func removeElements(ids: [String]) async throws {
         guard !self.webView.isLoading, !ids.isEmpty else { return }
         let idsJSON = try encodeJSON(ids)
-        _ = try await webView.callAsyncJavaScript(
+        _ = try await callOwnedCanvasMutation(
             "window.excalidrawZHelper.removeElements(\(idsJSON));",
-            arguments: [:],
-            contentWorld: .page
+            reason: "removeElements"
         )
-        documentSyncController.scheduleProgrammaticMutationCommit(reason: "removeElements")
     }
 }
