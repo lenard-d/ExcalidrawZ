@@ -98,7 +98,13 @@ struct ExcalidrawToolbar: View {
                 }
             }
 #if os(iOS)
-            .excalidrawToolbarSurface(.capsule)
+            .apply { picker in
+                if UIDevice.current.userInterfaceIdiom == .pad, sizeClass != .dense {
+                    picker
+                } else {
+                    picker.excalidrawToolbarSurface(.capsule)
+                }
+            }
 #endif
             
             if #available(macOS 26.0, iOS 26.0, *),
