@@ -86,17 +86,38 @@ final class PDFInsertSheetUITests: XCTestCase {
     func testCancelDismissesPresentedSheetWithoutInserting() {
         let app = openFixture("cancel")
         assertNamedActions(in: app, bounds: app.frame)
+        assertCancelDismissal(in: app)
+    }
+
+    func testCompactCancelDismissesPresentedSheetWithoutInserting() {
+        let app = openFixture("compactCancel")
+        assertActions(in: app, size: CGSize(width: 320, height: 768))
+        assertCancelDismissal(in: app)
+    }
+
+    func testSuccessfulInsertDismissesPresentedSheet() {
+        let app = openFixture("success")
+        assertNamedActions(in: app, bounds: app.frame)
+        assertSuccessfulInsertDismissal(in: app)
+    }
+
+    func testCompactSuccessfulInsertDismissesPresentedSheet() {
+        let app = openFixture("compactSuccess")
+        assertActions(in: app, size: CGSize(width: 320, height: 768))
+        assertSuccessfulInsertDismissal(in: app)
+    }
+
+    private func assertCancelDismissal(in app: XCUIApplication) {
         app.buttons["pdfInsert.cancel"].tap()
         assertLabel("pdfFixture.presentation", equals: "dismissed", in: app)
         XCTAssertFalse(app.buttons["pdfInsert.confirm"].exists)
         XCTAssertFalse(app.buttons["pdfInsert.cancel"].exists)
         XCTAssertEqual(app.staticTexts["pdfFixture.callbackCount"].label, "0")
         XCTAssertEqual(app.staticTexts["pdfFixture.callbackDigest"].label, "none")
+        XCTAssertEqual(app.staticTexts["pdfFixture.callbackOptions"].label, "none")
     }
 
-    func testSuccessfulInsertDismissesPresentedSheet() {
-        let app = openFixture("success")
-        assertNamedActions(in: app, bounds: app.frame)
+    private func assertSuccessfulInsertDismissal(in app: XCUIApplication) {
         app.buttons["pdfInsert.confirm"].tap()
         assertLabel("pdfFixture.presentation", equals: "dismissed", in: app)
         XCTAssertFalse(app.buttons["pdfInsert.confirm"].exists)

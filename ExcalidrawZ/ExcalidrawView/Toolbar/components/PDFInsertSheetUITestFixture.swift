@@ -23,7 +23,15 @@ struct PDFInsertSheetUITestFixture: View {
                 Color.clear
                     .frame(width: scenario.size.width, height: scenario.size.height)
                     .sheet(isPresented: $isPresented, onDismiss: { didDismiss = true }) {
-                        dialog
+                        if scenario.isCompact {
+                            dialog
+                                .frame(width: scenario.size.width, height: scenario.size.height)
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier("pdfFixture.viewport")
+                                .padding(.top, 16)
+                        } else {
+                            dialog
+                        }
                     }
             } else {
                 dialog
@@ -74,7 +82,7 @@ struct PDFInsertSheetUITestFixture: View {
             callbackCount += 1
             if scenario == .retry {
                 try await withCheckedThrowingContinuation { pendingInsert = $0 }
-            } else if scenario != .success {
+            } else if !scenario.succeeds {
                 throw InsertFailure.expected
             }
         }
@@ -90,6 +98,7 @@ struct PDFInsertSheetUITestFixture: View {
 
     private enum Scenario: String {
         case wide, tall, compact, accessibility, narrowAccessibility, shortRegular, cancel, success, empty, retry
+        case compactCancel, compactSuccess
 
         var size: CGSize {
             switch self {
@@ -101,13 +110,18 @@ struct PDFInsertSheetUITestFixture: View {
 
         var isCompact: Bool {
             self == .compact || self == .narrowAccessibility || self == .retry
+                || self == .compactCancel || self == .compactSuccess
         }
 
         var usesAccessibilityText: Bool {
             self == .accessibility || self == .narrowAccessibility
         }
 
-        var presentsSheet: Bool { self == .cancel || self == .success }
+        var presentsSheet: Bool {
+            self == .cancel || self == .success || self == .compactCancel || self == .compactSuccess
+        }
+
+        var succeeds: Bool { self == .success || self == .compactSuccess }
     }
 
     private static func digest(_ data: Data) -> String {
