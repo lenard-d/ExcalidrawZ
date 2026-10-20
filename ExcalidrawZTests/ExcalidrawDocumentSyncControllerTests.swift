@@ -118,18 +118,23 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         let earlyRecovery = expectation(description: "Recovery must not finish while the helper is held")
         earlyFlush.isInverted = true
         earlyRecovery.isInverted = true
+        let flushStarted = expectation(description: "Lifecycle flush invoked")
+        let recoveryStarted = expectation(description: "Recovery export invoked")
         var checkingEarlyCompletion = true
         let flush = Task {
+            flushStarted.fulfill()
             await controller.flushPendingDirtySnapshot(reason: "sceneBackground", force: true, expectedFileID: owner.fileID)
             if checkingEarlyCompletion { earlyFlush.fulfill() }
         }
         let recovery = Task {
+            recoveryStarted.fulfill()
             let file = try await controller.currentCanvasFileForRecoveryExport()
             if checkingEarlyCompletion { earlyRecovery.fulfill() }
             return file
         }
         fixture.cancelOnClose(flush)
         fixture.cancelOnClose(recovery)
+        await fulfillment(of: [flushStarted, recoveryStarted], timeout: 2)
         await fulfillment(of: [earlyFlush, earlyRecovery], timeout: 0.1)
         checkingEarlyCompletion = false
         let readsWhileHeld = try await fixture.integer("window.snapshotReads")
@@ -143,9 +148,10 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         XCTAssertEqual(recovered.id, owner.fileID)
         XCTAssertTrue(controller.isCurrentCanvasMutationSession(owner))
         let expected = try await fixture.scene()
-        XCTAssertEqual(try fixture.scene(from: Data(contentsOf: fixture.url)), expected)
+        let persisted = try fixture.persistedScene(from: expected)
+        XCTAssertEqual(try fixture.scene(from: Data(contentsOf: fixture.url)), persisted)
         XCTAssertEqual(try fixture.scene(from: XCTUnwrap(recovered.content)), expected)
-        XCTAssertEqual(try fixture.scene(from: XCTUnwrap(fixture.model.file?.content)), expected)
+        XCTAssertEqual(try fixture.scene(from: XCTUnwrap(fixture.model.file?.content)), persisted)
         XCTAssertFalse(controller.hasPendingDirtySnapshot)
         let pending = await ExternalFileSaveCoordinator.shared.pendingContent(at: fixture.url, session: owner.saveSession)
         XCTAssertNil(pending)
@@ -214,8 +220,13 @@ private final class CanvasControllerFixture {
     static func open() async throws -> CanvasControllerFixture {
         let fixture = try CanvasControllerFixture()
         do {
+            // Match the actual open-from-URL entry point, including its UIDocument writer.
+            try await fixture.state.prepareOpenInPlaceAccess(to: fixture.url)
             let accepted = await fixture.state.requestActiveFileChange(.temporaryFile(fixture.url))
             guard accepted else { throw SaveTestWaitError.timedOut }
+            let target = try XCTUnwrap(fixture.state.capturedCanvasSaveTarget(for: .temporaryFile(fixture.url)))
+            XCTAssertTrue(target.isOpenInPlace)
+            _ = try XCTUnwrap(target.externalWriter)
             let view = ControllerTestCanvas(model: fixture.model)
                 .environmentObject(fixture.state).environmentObject(fixture.toolState)
                 .environmentObject(fixture.exportState).environmentObject(fixture.preferences)
@@ -260,6 +271,11 @@ private final class CanvasControllerFixture {
             try? await evaluate("window.releaseLoad?.(); window.releaseImage?.();")
         }
         for cleanup in taskCleanup { await cleanup() }
+        // Complete any deferred helper snapshot before releasing the real document session.
+        if let core {
+            let flush = Task { await core.documentSyncController.flushPendingDirtySnapshot(reason: "testCleanup", force: true) }
+            _ = try? await boundedSaveTestValue(flush, timeout: .seconds(8))
+        }
         core?.documentSyncController.resetFileLoadState()
         core?.webView.stopLoading()
         core?.webView.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -273,7 +289,23 @@ private final class CanvasControllerFixture {
         window.rootViewController = nil
         let session = state.externalSaveSessionID
         await ExternalFileSaveCoordinator.shared.releaseSession(session)
-        try? FileManager.default.removeItem(at: directory)
+        state.temporaryFiles.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
+        do {
+            // Access ownership closes UIDocument after its existing five-second grace period.
+            try await waitUntil {
+                !NSFileCoordinator.filePresenters.contains {
+                    $0.presentedItemURL?.standardizedFileURL == self.url.standardizedFileURL
+                }
+            }
+            let pending = await ExternalFileSaveCoordinator.shared.pendingContent(at: url, session: session)
+            guard pending == nil else {
+                XCTFail("Synthetic failed save retained for diagnosis at \(directory.path)")
+                return
+            }
+            try FileManager.default.removeItem(at: directory)
+        } catch {
+            XCTFail("Synthetic document cleanup did not finish: \(error)")
+        }
     }
 
     func evaluate(_ script: String) async throws {
@@ -299,6 +331,14 @@ private final class CanvasControllerFixture {
         return ["elements": try XCTUnwrap(document["elements"]),
                 "appState": try XCTUnwrap(document["appState"]),
                 "files": try XCTUnwrap(document["files"])] as NSDictionary
+    }
+
+    func persistedScene(from liveScene: NSDictionary) throws -> NSDictionary {
+        var expected = try XCTUnwrap(liveScene as? [String: Any])
+        var appState = try XCTUnwrap(expected["appState"] as? [String: Any])
+        appState["name"] = "synthetic"
+        expected["appState"] = appState
+        return expected as NSDictionary
     }
 
     func waitForJavaScript(_ condition: String) async throws {
