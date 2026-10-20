@@ -42,8 +42,7 @@ final class PageModeController: ObservableObject {
     }
 
     func createPage(after page: PageModePage, placement: PageModePlacement) async -> Bool {
-        await createPage(command: .init(action: .add, pageID: page.id, width: page.width,
-            height: page.height, layout: page.layout ?? .blank, placement: placement))
+        await createPage(command: .init(action: .add, pageID: page.id, placement: placement))
     }
 
     private func createPage(command: PageModeCommand) async -> Bool {

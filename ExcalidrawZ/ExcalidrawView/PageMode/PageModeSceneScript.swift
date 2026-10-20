@@ -96,9 +96,11 @@ enum PageModeSceneScript {
         case "list":
             return state(null);
         case "add": {
-            const { width, height } = command;
-            const minimum = command.pageID == null ? 100 : 1;
-            const maximum = command.pageID == null ? 2000 : 20000;
+            const reference = command.pageID == null ? null : getPage();
+            if (reference) assertEditable(reference);
+            const { width, height } = reference ?? command;
+            const minimum = reference ? 1 : 100;
+            const maximum = reference ? 20000 : 2000;
             if (![width, height].every(value => Number.isFinite(value) && value >= minimum && value <= maximum)) {
                 throw new Error("invalidSize");
             }
@@ -112,9 +114,7 @@ enum PageModeSceneScript {
             }
             let x = pages.length ? pages[pages.length - 1].x : 0;
             let y = bottom + 80;
-            if (command.pageID != null) {
-                const reference = getPage();
-                assertEditable(reference);
+            if (reference) {
                 if (command.placement !== "below" && command.placement !== "right") throw new Error("failedAction");
                 x = reference.x + (command.placement === "right" ? reference.width + 80 : 0);
                 y = reference.y + (command.placement === "below" ? reference.height + 80 : 0);
@@ -134,7 +134,7 @@ enum PageModeSceneScript {
             if (created.length !== 1 || created[0].type !== "frame") throw new Error("failedAction");
             const frame = created[0];
             const highestOrder = pages.reduce((highest, page) => Math.max(highest, Number.isFinite(order(page)) ? order(page) : 0), -1);
-            const layout = checkedLayout(command.layout ?? "blank");
+            const layout = checkedLayout(reference ? describe(reference).layout : command.layout ?? "blank");
             frame.customData = { ...frame.customData, excalidrawZPage: { version: 1, order: highestOrder + 1, layout } };
             helper.addElements([...makeGuides(frame, layout), frame], capture);
             pages.push(frame);

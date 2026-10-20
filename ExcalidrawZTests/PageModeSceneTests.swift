@@ -136,6 +136,28 @@ final class PageModeSceneTests: XCTestCase {
         XCTAssertEqual(context.evaluateScript("writes.length").toInt32(), writesBefore)
     }
 
+    func testContextAddUsesLiveSelectedSizeAndLayoutInsteadOfCachedArguments() throws {
+        context.evaluateScript("elements = [page('selected', 0, { x: 100, y: 200, width: 400, height: 300, customData: { excalidrawZPage: { version: 1, order: 0, layout: 'grid' } } }), element('ink', { x: 120, y: 240, frameId: 'selected', text: 'answer' })]; var inkBefore = JSON.stringify(elements[1]);")
+        let right = try run(.init(action: .add, pageID: "selected", width: 595, height: 842, layout: .ruled, placement: .right))
+        let created = try XCTUnwrap(right.pages.last)
+        XCTAssertEqual(created.width, 400)
+        XCTAssertEqual(created.height, 300)
+        XCTAssertEqual(created.layout, .grid)
+        XCTAssertEqual(created.x, 580)
+        XCTAssertEqual(created.y, 200)
+        XCTAssertTrue(bool("elements.filter(e => e.type === 'line' && e.frameId === 'new1').length === 33 && JSON.stringify(elements.find(e => e.id === 'ink')) === inkBefore"))
+
+        context.evaluateScript("var reference = elements.find(e => e.id === 'selected'); reference.width = 600; reference.height = 400; reference.customData.excalidrawZPage.layout = 'blank';")
+        let below = try run(.init(action: .add, pageID: "selected", placement: .below))
+        let next = try XCTUnwrap(below.pages.last)
+        XCTAssertEqual(next.width, 600)
+        XCTAssertEqual(next.height, 400)
+        XCTAssertEqual(next.layout, .blank)
+        XCTAssertEqual(next.x, 100)
+        XCTAssertEqual(next.y, 680)
+        XCTAssertTrue(bool("elements.filter(e => e.type === 'line').length === 33 && JSON.stringify(elements.find(e => e.id === 'ink')) === inkBefore"))
+    }
+
     func testLayoutReplacementPreservesInkOtherPagesAndForeignMetadataBehindInk() throws {
         context.evaluateScript("elements = [page('one', 0, { width: 595, height: 842 }), element('answer', { frameId: 'one', text: 'ink', fileId: 'image' }), page('two', 1)]; var inkBefore = JSON.stringify(elements[1]); var otherBefore = JSON.stringify(elements[2]);")
         _ = try run(.init(action: .setLayout, pageID: "one", layout: .grid))
