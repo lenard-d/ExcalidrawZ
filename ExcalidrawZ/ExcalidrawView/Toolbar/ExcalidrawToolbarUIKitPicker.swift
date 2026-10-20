@@ -62,6 +62,11 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                 }
             }
             control.addTarget(self, action: #selector(commitSelection(_:)), for: .valueChanged)
+            #if DEBUG && targetEnvironment(simulator)
+            if ProcessInfo.processInfo.arguments.contains("-ToolbarStockTrackingProbe") {
+                return control
+            }
+            #endif
             // Keep tap, drag preview, and release in one input path.
             let scrub = UILongPressGestureRecognizer(target: self, action: #selector(handleScrub(_:)))
             scrub.minimumPressDuration = 0
