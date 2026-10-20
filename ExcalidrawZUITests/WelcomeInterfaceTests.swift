@@ -60,8 +60,14 @@ final class WelcomeInterfaceTests: XCTestCase {
             XCTAssertTrue(primaryAction.isHittable)
             primaryAction.tap()
             assertConsentIsRequired(in: app)
-            app.buttons["Cancel"].tap()
-            XCTAssertTrue(primaryAction.waitForExistence(timeout: 5))
+            // The normal-size test covers Cancel. Use native sheet dismissal here.
+            app.swipeDown()
+            let dismissed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"),
+                object: app.buttons["Enable AI"]
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+            XCTAssertTrue(primaryAction.isHittable)
             XCTAssertFalse(app.buttons["Send message"].exists)
         }
     }
