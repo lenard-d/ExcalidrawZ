@@ -79,7 +79,7 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
     }
 
     private var undoMenu: some View {
-        Group {
+        SwiftUI.Group {
             if core.canUndo {
                 Menu {
                     undoActions
