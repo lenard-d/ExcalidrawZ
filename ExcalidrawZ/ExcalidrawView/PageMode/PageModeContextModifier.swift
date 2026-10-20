@@ -33,6 +33,8 @@ private struct PageModeContextHost: View {
         let contextController = controller
         let canShowContext = available
 #if DEBUG
+        let currentOwner = core.documentSyncController.captureCanvasMutationSession()
+        let _ = core.logger.debug("[PageModeContext] owner capturePresent=\(currentOwner != nil) fileMatches=\(currentOwner?.fileID == owner?.fileID) saveMatches=\(currentOwner?.saveSession == owner?.saveSession) generationMatches=\(currentOwner?.loadGeneration == owner?.loadGeneration) parentPresent=\(core.parent?.file != nil) parentMatches=\(core.parent?.file?.id == fileState.currentActiveFile?.id)")
         let _ = core.logger.debug("[PageModeContext] body controller=\(contextController != nil) available=\(canShowContext) active=\(scenePhase == .active) loading=\(core.isLoading) activeCore=\(toolState.excalidrawWebCoordinator === core) locked=\(lockedContentState.activeFileLockState == .locked) selected=\(core.selectedElementIDs.count) ownerPresent=\(owner != nil) ownerCurrent=\(owner.map { core.documentSyncController.isCurrentCanvasMutationSession($0) } ?? true)")
 #endif
         return GeometryReader { geometry in
