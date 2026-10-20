@@ -49,7 +49,9 @@ final class PDFInsertSheetUITests: XCTestCase {
         let initialOptionFrame = viewerOption.frame
         let viewport = app.otherElements["pdfFixture.viewport"]
         viewport.swipeUp()
-        XCTAssertNotEqual(viewerOption.frame, initialOptionFrame, "The dialog content must actually scroll.")
+        // Form can remove the previously visible row from the public hierarchy.
+        let didScroll = !viewerOption.exists || viewerOption.frame != initialOptionFrame
+        XCTAssertTrue(didScroll, "The mode row must move or leave the viewport after scrolling.")
         XCTAssertEqual(insert.frame, initialFrame, "Insert must stay fixed while content scrolls.")
         assertActions(in: app, width: 320)
         assertInsertCallback(in: app)
