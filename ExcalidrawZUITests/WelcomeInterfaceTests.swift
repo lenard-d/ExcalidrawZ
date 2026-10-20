@@ -56,7 +56,12 @@ final class WelcomeInterfaceTests: XCTestCase {
                 .firstMatch
             scrollToReadableContent(lastFeature, in: scrollView, app: app)
 
-            scrollChatActionIntoView(primaryAction, in: scrollView, app: app)
+            scrollWelcomeActionIntoView(
+                primaryAction,
+                in: scrollView,
+                below: app.navigationBars["AI Chat"],
+                app: app
+            )
             XCTAssertTrue(primaryAction.isHittable)
             primaryAction.tap()
             assertConsentIsRequired(in: app)
@@ -87,7 +92,12 @@ final class WelcomeInterfaceTests: XCTestCase {
         for (index, orientation) in [UIDeviceOrientation.landscapeLeft, .portrait].enumerated() {
             XCUIDevice.shared.orientation = orientation
             scrollToReadableContent(planCaption, in: scrollView, app: app)
-            scrollToHittable(primaryAction, in: scrollView, towardBottom: false)
+            scrollWelcomeActionIntoView(
+                primaryAction,
+                in: scrollView,
+                below: app.navigationBars["Presentation"],
+                app: app
+            )
             XCTAssertTrue(primaryAction.isHittable)
             primaryAction.tap()
 
@@ -263,12 +273,12 @@ final class WelcomeInterfaceTests: XCTestCase {
         }
     }
 
-    private func scrollChatActionIntoView(
+    private func scrollWelcomeActionIntoView(
         _ action: XCUIElement,
         in scrollView: XCUIElement,
+        below navigationBar: XCUIElement,
         app: XCUIApplication
     ) {
-        let navigationBar = app.navigationBars["AI Chat"]
         func isReadyToTap() -> Bool {
             guard action.exists, navigationBar.exists else { return false }
             let frame = action.frame
@@ -284,7 +294,7 @@ final class WelcomeInterfaceTests: XCTestCase {
             if isReadyToTap() { return }
             scrollView.swipeDown()
         }
-        XCTAssertTrue(isReadyToTap(), "The complete AI welcome action must be visible below the navigation bar and hittable.")
+        XCTAssertTrue(isReadyToTap(), "The complete welcome action must be visible below the navigation bar and hittable.")
     }
 }
 #endif
