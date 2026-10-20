@@ -366,7 +366,7 @@ private final class CanvasControllerFixture {
     // Keep a vetoed fixture and its live owner available until the test process exits.
     private static var retainedFixtures: [CanvasControllerFixture] = []
     private(set) var libraryFile: File?
-    private var libraryGroup: Group?
+    private var libraryGroup: ExcalidrawZ.Group?
     let libraryName = "Library-save-test-" + UUID().uuidString
     let state = FileState()
     let model = CanvasControllerModel()
@@ -401,7 +401,7 @@ private final class CanvasControllerFixture {
                 }
                 stage = "create the unique synthetic library record"
                 let context = PersistenceController.shared.container.viewContext
-                let group = Group(name: fixture.libraryName, context: context)
+                let group = ExcalidrawZ.Group(name: fixture.libraryName, context: context)
                 try context.save()
                 fixture.libraryGroup = group
                 let id = try await PersistenceController.shared.fileRepository.createFile(
