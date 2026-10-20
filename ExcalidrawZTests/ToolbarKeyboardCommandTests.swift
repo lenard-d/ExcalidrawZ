@@ -12,8 +12,7 @@ final class ToolbarKeyboardCommandTests: XCTestCase {
         let restored = ExcalidrawToolbarToolOrder(storedData: order.storedData)
         var selectedTools: [ExcalidrawTool] = []
         let webView = makeWebView { key in
-            if case .number(let number) = key,
-               let tool = restored.tool(forShortcutNumber: number) {
+            if let tool = ExcalidrawCore.orderedToolbarTool(for: key, in: restored) {
                 selectedTools.append(tool)
             }
         }
@@ -33,17 +32,10 @@ final class ToolbarKeyboardCommandTests: XCTestCase {
         var selectedTools: [ExcalidrawTool] = []
         var alternateDispatchCount = 0
         let webView = makeWebView { key in
-            let tool: ExcalidrawTool?
-            switch key {
-                case .number(let number):
-                    tool = restored.tool(forShortcutNumber: number)
-                case .alternateNumber(let number):
-                    alternateDispatchCount += 1
-                    tool = restored.tool(forShortcutNumber: number, alternate: true)
-                default:
-                    return
+            if case .alternateNumber = key { alternateDispatchCount += 1 }
+            if let tool = ExcalidrawCore.orderedToolbarTool(for: key, in: restored) {
+                selectedTools.append(tool)
             }
-            if let tool { selectedTools.append(tool) }
         }
 
         for input in ["1", "2", "6", "0"] {
