@@ -104,7 +104,7 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
     func testRealMediaHelperKeepsLifecycleFlushAndRecoveryWaitingForItsScene() async throws {
         let fixture = try await CanvasControllerFixture.open()
         addTeardownBlock { await fixture.close() }
-        let core = fixture.core
+        let core = try XCTUnwrap(fixture.core)
         let controller = core.documentSyncController
         let owner = try XCTUnwrap(controller.captureCanvasMutationSession())
         let mutation = Task {
