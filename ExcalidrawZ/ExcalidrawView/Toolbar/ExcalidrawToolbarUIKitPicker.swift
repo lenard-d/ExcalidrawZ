@@ -1,9 +1,6 @@
 #if os(iOS)
 import SwiftUI
 import UIKit
-#if DEBUG && targetEnvironment(simulator)
-import OSLog
-#endif
 
 /// Previews the contacted segment and commits the tool only on a valid release.
 struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
@@ -55,22 +52,6 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
         private var pendingRender: PendingRender?
         private var isFinishingContact = false
 
-        private func trace(_ name: String, _ control: UISegmentedControl, event: UIEvent? = nil) {
-#if DEBUG && targetEnvironment(simulator)
-            guard ProcessInfo.processInfo.arguments.contains("-ToolbarContactDiagnostic")
-                || ProcessInfo.processInfo.environment["EXCALIDRAWZ_TOOLBAR_CONTACT_DIAGNOSTIC"] == "1" else { return }
-            let eventType = event?.type.rawValue ?? -1
-            let allTouches = event?.allTouches?.count ?? -1
-            let controlTouches = event?.touches(for: control)?.count ?? -1
-            let boundIndex = displayedItems.firstIndex { $0.tool == selection.wrappedValue } ?? -1
-            let hasContact = contact != nil
-            let invalidated = contact?.invalidated ?? false
-            Logger(subsystem: "ExcalidrawZ.ToolbarContactDiagnostic", category: "events").notice(
-                "event=\(name, privacy: .public) type=\(eventType) allTouches=\(allTouches) controlTouches=\(controlTouches) tracking=\(control.isTracking) inside=\(control.isTouchInside) index=\(control.selectedSegmentIndex) bound=\(boundIndex) contact=\(hasContact) invalidated=\(invalidated) finishing=\(self.isFinishingContact)"
-            )
-#endif
-        }
-
         init(selection: Binding<ExcalidrawTool?>) { self.selection = selection }
 
         func makeControl() -> UISegmentedControl {
@@ -98,7 +79,6 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
             size: CGFloat, withFooter: Bool, scale: CGFloat
         ) {
             self.selection = selection
-            trace("update", control)
             if contact != nil || control.isTracking {
                 pendingRender = PendingRender(items: items, size: size, withFooter: withFooter, scale: scale)
                 if contact?.initialSelection != selection.wrappedValue || displayedItems != items
@@ -133,7 +113,6 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                 }
             }
             restoreSelection(control)
-            trace("updateRendered", control)
         }
 
         private func restoreSelection(_ control: UISegmentedControl) {
@@ -142,32 +121,25 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
         }
 
         @objc private func commitSelection(_ control: UISegmentedControl, event: UIEvent?) {
-            trace("valueChanged", control, event: event)
             // Touch selection is committed by its release handler, including an unchanged native index.
             guard contact == nil, !isFinishingContact, event?.allTouches?.isEmpty != false else { return }
             guard displayedItems.indices.contains(control.selectedSegmentIndex) else { return }
             selection.wrappedValue = displayedItems[control.selectedSegmentIndex].tool
-            trace("valueChangedCommitted", control, event: event)
         }
 
         @objc private func touchDown(_ control: UISegmentedControl, event: UIEvent?) {
-            trace("touchDown", control, event: event)
             guard let touches = event?.touches(for: control), touches.count == 1,
                   let touch = touches.first else { return }
             beginContact(control, touch: touch, at: touch.location(in: control))
-            trace("touchDownHandled", control, event: event)
         }
 
         @objc private func touchMoved(_ control: UISegmentedControl, event: UIEvent?) {
-            trace("touchDrag", control, event: event)
             guard let touch = contact?.touch,
                   event?.touches(for: control)?.contains(touch) == true else { return }
             moveContact(control, touch: touch, to: touch.location(in: control))
-            trace("touchDragHandled", control, event: event)
         }
 
         @objc private func touchReleased(_ control: UISegmentedControl, event: UIEvent?) {
-            trace("touchUpInside", control, event: event)
             guard let touch = contact?.touch else { return }
             guard let touches = event?.touches(for: control) else {
                 cancelContact(control)
@@ -175,11 +147,9 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
             }
             guard touches.contains(touch) else { return }
             endContact(control, touch: touch, at: touch.location(in: control))
-            trace("touchUpInsideHandled", control, event: event)
         }
 
         @objc private func touchCancelled(_ control: UISegmentedControl) {
-            trace("touchCancelOrUpOutside", control)
             cancelContact(control)
         }
 
@@ -228,7 +198,6 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                 } else {
                     self.restoreSelection(control)
                 }
-                self.trace("settled", control)
             }
         }
 
