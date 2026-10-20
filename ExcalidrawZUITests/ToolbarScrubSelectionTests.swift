@@ -632,12 +632,22 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let drawingSettings = app.buttons["toolbar.drawingSettings"].firstMatch
         revealMenuAction(drawingSettings, in: app)
         drawingSettings.tap()
-        let addTool = app.buttons["settings.toolbar.addTool"].firstMatch
+        let addTool = app.descendants(matching: .any)["settings.toolbar.addTool"].firstMatch
         XCTAssertTrue(addTool.waitForExistence(timeout: 5))
-        let form = app.collectionViews.containing(.button, identifier: "settings.toolbar.addTool").firstMatch
+        let form = app.collectionViews.containing(.any, identifier: "settings.toolbar.addTool").firstMatch
         XCTAssertTrue(form.exists)
-        for _ in 0..<4 where !addTool.isHittable || !form.frame.contains(addTool.frame) {
-            form.swipeUp()
+        for _ in 0..<4 {
+            guard addTool.exists, form.exists else {
+                captureEditorPhase(app, name: "STOP Add tool left the visible settings form during scrolling")
+                XCTFail("The settings scroll must retain the Add tool target")
+                return
+            }
+            if addTool.isHittable, form.frame.contains(addTool.frame) { break }
+            // A full swipe moves this bottom-clipped row above the virtualized form.
+            let distance = min(120, max(40, addTool.frame.maxY - form.frame.maxY + 24))
+            let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
+                        withVelocity: .slow, thenHoldForDuration: 0.1)
         }
         guard addTool.isHittable, form.frame.contains(addTool.frame) else {
             captureEditorPhase(app, name: "STOP Add tool is not fully visible in Drawing settings")
