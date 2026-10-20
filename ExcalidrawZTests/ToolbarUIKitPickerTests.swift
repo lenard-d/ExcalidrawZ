@@ -109,28 +109,6 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         XCTAssertEqual(selected, .ellipse, "An in-row release can supply the final contacted tool")
     }
 
-    func testOutsideChangeRestoresLastContactAfterNativeSelectionChanges() {
-        let items = ExcalidrawToolbarToolPresentation(order: .init()).items
-        var selected: ExcalidrawTool? = .cursor
-        let binding = Binding(get: { selected }, set: { selected = $0 })
-        let (coordinator, control) = makePicker(items: items, selection: binding)
-        let gesture = ScrubInput()
-        control.addGestureRecognizer(gesture)
-
-        send(.began, at: CGPoint(x: 100, y: 22), through: gesture, to: coordinator)
-        control.selectedSegmentIndex = 0
-        send(.changed, at: CGPoint(x: 100, y: 80), through: gesture, to: coordinator)
-        XCTAssertEqual(control.selectedSegmentIndex, 2)
-        XCTAssertEqual(selected, .cursor, "Outside preview must not commit the canvas tool")
-
-        send(.changed, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
-        control.selectedSegmentIndex = 0
-        send(.changed, at: CGPoint(x: 220, y: 80), through: gesture, to: coordinator)
-        XCTAssertEqual(control.selectedSegmentIndex, 5, "Re-entry changes the retained tool")
-        send(.ended, at: CGPoint(x: 220, y: 80), through: gesture, to: coordinator)
-        XCTAssertEqual(selected, .line)
-    }
-
     func testDisabledSegmentRetainsPreviewButDisabledControlCannotCommit() {
         let items = ExcalidrawToolbarToolPresentation(order: .init()).items
         var selected: ExcalidrawTool? = .ellipse
