@@ -23,6 +23,24 @@ final class PageModeUITests: XCTestCase {
         if originalOrientation != .unknown { XCUIDevice.shared.orientation = originalOrientation }
     }
 
+    func testSyntheticPageWritingFeedback() throws {
+        let app = try openSyntheticDrawing()
+        try openPages(in: app)
+        let add = app.buttons["pages.add"].firstMatch
+        try requireHittable(add, in: app, step: "Create a tagged page for writing feedback")
+        add.tap()
+        let canvas = app.webViews.firstMatch
+        try requireHittable(canvas, in: app, step: "Synthetic page canvas")
+        try requireHittable(pageHeader("Page 1", in: app), in: app, step: "Tagged page before drawing")
+        capture(app, step: "Tagged page before writing")
+        try selectTool("Diamond", in: app)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.45))
+            .press(forDuration: 0.1,
+                   thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.60)),
+                   withVelocity: .slow, thenHoldForDuration: 3)
+        capture(app, step: "Tagged page after writing, inspect video for blue border during contact")
+    }
+
     func testSyntheticPageContextLayoutsAndBothAddDirections() throws {
         let app = try openSyntheticDrawing()
         let canvas = app.webViews.firstMatch

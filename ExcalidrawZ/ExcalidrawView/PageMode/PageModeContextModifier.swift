@@ -1,4 +1,5 @@
 import Combine
+import Logging
 import SwiftUI
 
 @MainActor
@@ -31,7 +32,13 @@ private struct PageModeContextHost: View {
         // Read context state in this body, before the deferred layout closure.
         let contextController = controller
         let canShowContext = available
+#if DEBUG
+        let _ = core.logger.debug("[PageModeContext] body controller=\(contextController != nil) available=\(canShowContext)")
+#endif
         return GeometryReader { geometry in
+#if DEBUG
+            let _ = core.logger.debug("[PageModeContext] geometry size=\(geometry.size) insets=\(nativeViewportInsets)")
+#endif
             if let controller = contextController, canShowContext {
                 PageModeContextActions(controller: controller, selectedIDs: core.selectedElementIDs,
                     scroll: CGPoint(x: core.cameraState.scrollX, y: core.cameraState.scrollY),
@@ -91,6 +98,9 @@ private struct PageModeContextHost: View {
                     fileState: fileState, lockedContentState: lockedContentState).makeController()
                 let nextOwner = core.documentSyncController.captureCanvasMutationSession()
                 let didRead = await next.perform(.init(action: .list))
+#if DEBUG
+                core.logger.debug("[PageModeContext] admission read=\(didRead) cancelled=\(Task.isCancelled) available=\(available) selectionMatches=\(core.selectedElementIDs == selectedIDs) capturedOwner=\(nextOwner != nil) ownerCurrent=\(nextOwner.map { core.documentSyncController.isCurrentCanvasMutationSession($0) } ?? false) previousBusy=\(controller?.isBusy == true) nextValid=\(next.isValid) selectedPage=\(next.pages.contains { selectedIDs.contains($0.id) })")
+#endif
                 guard didRead, !Task.isCancelled,
                       available, core.selectedElementIDs == selectedIDs,
                       let nextOwner, core.documentSyncController.isCurrentCanvasMutationSession(nextOwner),
@@ -98,6 +108,9 @@ private struct PageModeContextHost: View {
                 controller?.invalidate()
                 controller = next
                 owner = nextOwner
+#if DEBUG
+                core.logger.debug("[PageModeContext] published controller=\(controller != nil)")
+#endif
             } catch {
                 // A context read has no user action to fail. An unavailable owner hides it.
                 if !Task.isCancelled { clear() }
@@ -117,11 +130,17 @@ private struct PageModeContextActions: View {
     @State private var controlsHeight: CGFloat = 52
 
     var body: some View {
+#if DEBUG
+        let _ = Logger(label: "PageModeContext").debug("[PageModeContext] actions valid=\(controller.isValid) pages=\(controller.pages.count) selected=\(selectedIDs.count) viewport=\(viewport)")
+#endif
         if controller.isValid, selectedIDs.count == 1,
            let page = controller.pages.first(where: { $0.id == selectedIDs[0] }), !page.locked {
             let size = CGSize(width: min(280, viewport.width - 16), height: controlsHeight)
             let origin = PageModeContextPlacement.origin(page: page, scroll: scroll,
                 zoom: zoom, viewport: viewport, controls: size)
+#if DEBUG
+            let _ = Logger(label: "PageModeContext").debug("[PageModeContext] placement page=\(page.x ?? 0),\(page.y ?? 0),\(page.width),\(page.height) scroll=\(scroll) zoom=\(zoom) controls=\(size) origin=\(String(describing: origin))")
+#endif
             if let origin {
                 VStack(alignment: .trailing, spacing: 4) {
                     HStack(spacing: 8) {
