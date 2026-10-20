@@ -1,0 +1,19 @@
+diff --git a/excalidraw-app/excalidrawZ/interaction.js b/excalidraw-app/excalidrawZ/interaction.js
+--- a/excalidraw-app/excalidrawZ/interaction.js
++++ b/excalidraw-app/excalidrawZ/interaction.js
+@@ -15,15 +15,6 @@ export const connectPencil = (flag) => {
+ };
+ export const togglePenMode = (flag) => {
+   window.excalidrawZHelper.inPencilMode = flag;
+-  const state = getExcalidrawState();
+-  if (!state) {
+-    return;
+-  }
+-  if (!state.activeTool.locked && flag) {
+-    toggleToolbarAction("Q");
+-  } else if (state.activeTool.locked && !flag) {
+-    toggleToolbarAction("Q");
+-  }
+ };
+ 
+ const dispatchSpaceKey = (type) => {
