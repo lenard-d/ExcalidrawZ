@@ -237,6 +237,28 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         captureEditorPhase(relaunched, name: "Eleven direct tools persist after process relaunch and a new drawing")
     }
 
+    func testTenConfiguredToolsAddLaserAndPersistAfterRelaunch() {
+        // Continue only the preserved context where the first Add already passed.
+        let app = openSyntheticDrawing()
+        let tenTools = defaultDirectToolNames + ["Frame"]
+        assertConfiguredDirectTools(tenTools, in: app)
+        captureEditorPhase(app, name: "Preserved ten direct tools before adding Laser")
+
+        addConfiguredDirectTool("laser", name: "Laser", in: app)
+        let elevenTools = tenTools + ["Laser"]
+        assertConfiguredDirectTools(elevenTools, in: app)
+        selectConfiguredDirectTool("Laser", in: app)
+        selectConfiguredDirectTool("Frame", in: app)
+        captureEditorPhase(app, name: "Laser added after the preserved tenth Frame tool")
+
+        app.terminate()
+        let relaunched = openSyntheticDrawing()
+        assertConfiguredDirectTools(elevenTools, in: relaunched)
+        selectConfiguredDirectTool("Frame", in: relaunched)
+        selectConfiguredDirectTool("Laser", in: relaunched)
+        captureEditorPhase(relaunched, name: "Preserved eleven direct tools after process relaunch and a new drawing")
+    }
+
     func testPenModeAndKeepToolActiveRemainIndependent() {
         let app = openSyntheticDrawing()
         let menu = app.buttons["toolbar.moreTools"].firstMatch
@@ -556,23 +578,38 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         revealMenuAction(drawingSettings, in: app)
         drawingSettings.tap()
         let addTool = app.descendants(matching: .any)["settings.toolbar.addTool"].firstMatch
-        XCTAssertTrue(addTool.waitForExistence(timeout: 5))
-        let form = app.collectionViews.containing(.any, identifier: "settings.toolbar.addTool").firstMatch
-        XCTAssertTrue(form.exists)
+        let reset = app.buttons["settings.toolbar.reset"].firstMatch
+        guard reset.waitForExistence(timeout: 5) else {
+            captureEditorPhase(app, name: "STOP Drawing settings did not expose its Reset control")
+            XCTFail("The observed Drawing settings form must open before scrolling")
+            return
+        }
+        // Keep an indexed form query so offscreen rows can leave the accessibility tree.
+        let forms = app.collectionViews.allElementsBoundByIndex.filter {
+            $0.buttons["settings.toolbar.reset"].exists
+        }
+        guard forms.count == 1 else {
+            captureEditorPhase(app, name: "STOP Drawing settings form is not uniquely identified")
+            XCTFail("Exactly one observed settings form must contain Reset")
+            return
+        }
+        let form = forms[0]
         for _ in 0..<4 {
-            guard addTool.exists, form.exists else {
-                captureEditorPhase(app, name: "STOP Add tool left the visible settings form during scrolling")
-                XCTFail("The settings scroll must retain the Add tool target")
+            guard form.exists else {
+                captureEditorPhase(app, name: "STOP Drawing settings form disappeared during scrolling")
+                XCTFail("The settings scroll must retain its form")
                 return
             }
-            if addTool.isHittable, form.frame.contains(addTool.frame) { break }
+            if addTool.exists, addTool.isHittable, form.frame.contains(addTool.frame) { break }
             // A full swipe moves this bottom-clipped row above the virtualized form.
-            let distance = min(120, max(40, addTool.frame.maxY - form.frame.maxY + 24))
+            let distance: CGFloat = addTool.exists
+                ? min(120, max(40, addTool.frame.maxY - form.frame.maxY + 24))
+                : 80
             let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.7))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -distance)),
                         withVelocity: .slow, thenHoldForDuration: 0.1)
         }
-        guard addTool.isHittable, form.frame.contains(addTool.frame) else {
+        guard addTool.exists, addTool.isHittable, form.frame.contains(addTool.frame) else {
             captureEditorPhase(app, name: "STOP Add tool is not fully visible in Drawing settings")
             XCTFail("The observed settings form must scroll to Add tool")
             return
