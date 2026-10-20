@@ -50,12 +50,13 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(cursor.exists)
         XCTAssertTrue(endpoint.exists, "Need a visible named Line or Arrow action for the scrub proof")
         XCTAssertLessThan(cursor.frame.midX, endpoint.frame.midX)
-        cursor.press(forDuration: 0.3, thenDragTo: endpoint, withVelocity: .slow, thenHoldForDuration: 0.3)
+        // Root records this held contact to inspect the control's selection background before release.
+        cursor.press(forDuration: 0.3, thenDragTo: endpoint, withVelocity: .slow, thenHoldForDuration: 3)
         assertSelection(endpoint, control: control)
         drag(in: canvas, from: CGVector(dx: 0.55, dy: 0.35), to: CGVector(dx: 0.75, dy: 0.55))
         capture(app, name: "Canvas after forward scrub to \(endpoint.label), inspect that tool result")
 
-        endpoint.press(forDuration: 0.3, thenDragTo: cursor, withVelocity: .slow, thenHoldForDuration: 0.3)
+        endpoint.press(forDuration: 0.3, thenDragTo: cursor, withVelocity: .slow, thenHoldForDuration: 3)
         assertSelection(cursor, control: control)
         drag(in: canvas, from: CGVector(dx: 0.20, dy: 0.30), to: CGVector(dx: 0.45, dy: 0.60))
         capture(app, name: "Canvas diamond selection after reverse scrub, inspect selection handles")
@@ -72,7 +73,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         assertSelection(endpoint, control: control)
 
         capture(app, name: "Real configured tools after quick taps and forward-reverse scrub")
-        // Root records video to verify the native selection preview during the drag.
+        // Post-release assertions do not establish the selection shown during either held contact.
     }
 
     private func drag(in canvas: XCUIElement, from start: CGVector, to end: CGVector) {
