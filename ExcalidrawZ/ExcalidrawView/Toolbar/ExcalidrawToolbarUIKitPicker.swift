@@ -37,8 +37,6 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
         private var renderedFooter: Bool?
         private var renderedScale: CGFloat?
         private struct Contact {
-            let touch: UITouch
-            let items: [ExcalidrawToolbarToolPresentation.Item]
             let initialSelection: ExcalidrawTool?
             var invalidated = false
         }
@@ -50,7 +48,6 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
         }
         private var contact: Contact?
         private var pendingRender: PendingRender?
-        private var isFinishingContact = false
 
         init(selection: Binding<ExcalidrawTool?>) { self.selection = selection }
 
@@ -64,11 +61,14 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                                             rightSegmentState: right, barMetrics: .default)
                 }
             }
-            control.addTarget(self, action: #selector(commitSelection(_:event:)), for: .valueChanged)
-            control.addTarget(self, action: #selector(touchDown(_:event:)), for: .touchDown)
-            control.addTarget(self, action: #selector(touchMoved(_:event:)), for: [.touchDragInside, .touchDragOutside, .touchDragEnter, .touchDragExit])
-            control.addTarget(self, action: #selector(touchReleased(_:event:)), for: .touchUpInside)
-            control.addTarget(self, action: #selector(touchCancelled(_:)), for: [.touchUpOutside, .touchCancel])
+            control.addTarget(self, action: #selector(commitSelection(_:)), for: .valueChanged)
+            // Keep tap, drag preview, and release in one input path.
+            let scrub = UILongPressGestureRecognizer(target: self, action: #selector(handleScrub(_:)))
+            scrub.minimumPressDuration = 0
+            scrub.allowableMovement = .greatestFiniteMagnitude
+            scrub.delaysTouchesBegan = true
+            scrub.cancelsTouchesInView = true
+            control.addGestureRecognizer(scrub)
             return control
         }
 
@@ -79,7 +79,7 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
             size: CGFloat, withFooter: Bool, scale: CGFloat
         ) {
             self.selection = selection
-            if contact != nil || control.isTracking {
+            if contact != nil {
                 pendingRender = PendingRender(items: items, size: size, withFooter: withFooter, scale: scale)
                 if contact?.initialSelection != selection.wrappedValue || displayedItems != items
                     || renderedSize != size || renderedFooter != withFooter || renderedScale != scale {
@@ -120,84 +120,48 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                 ?? UISegmentedControl.noSegment
         }
 
-        @objc private func commitSelection(_ control: UISegmentedControl, event: UIEvent?) {
-            // Touch selection is committed by its release handler, including an unchanged native index.
-            guard contact == nil, !isFinishingContact, event?.allTouches?.isEmpty != false else { return }
+        @objc private func commitSelection(_ control: UISegmentedControl) {
+            // Accessibility and keyboard actions do not use the contact recognizer.
+            guard contact == nil else { return }
             guard displayedItems.indices.contains(control.selectedSegmentIndex) else { return }
             selection.wrappedValue = displayedItems[control.selectedSegmentIndex].tool
         }
 
-        @objc private func touchDown(_ control: UISegmentedControl, event: UIEvent?) {
-            guard let touches = event?.touches(for: control), touches.count == 1,
-                  let touch = touches.first else { return }
-            beginContact(control, touch: touch, at: touch.location(in: control))
-        }
-
-        @objc private func touchMoved(_ control: UISegmentedControl, event: UIEvent?) {
-            guard let touch = contact?.touch,
-                  event?.touches(for: control)?.contains(touch) == true else { return }
-            moveContact(control, touch: touch, to: touch.location(in: control))
-        }
-
-        @objc private func touchReleased(_ control: UISegmentedControl, event: UIEvent?) {
-            guard let touch = contact?.touch else { return }
-            guard let touches = event?.touches(for: control) else {
-                cancelContact(control)
-                return
+        @objc func handleScrub(_ gesture: UILongPressGestureRecognizer) {
+            guard let control = gesture.view as? UISegmentedControl else { return }
+            let index = control.isEnabled ? segment(at: gesture.location(in: control), in: control) : nil
+            switch gesture.state {
+            case .began:
+                guard contact == nil, let index else { return }
+                contact = Contact(initialSelection: selection.wrappedValue)
+                control.selectedSegmentIndex = index
+            case .changed:
+                guard let contact, !contact.invalidated else { return }
+                if let index {
+                    control.selectedSegmentIndex = index
+                } else {
+                    restoreSelection(control)
+                }
+            case .ended:
+                if let contact, !contact.invalidated,
+                   contact.initialSelection == selection.wrappedValue, let index {
+                    selection.wrappedValue = displayedItems[index].tool
+                }
+                finishContact(control)
+            case .cancelled, .failed:
+                finishContact(control)
+            default:
+                break
             }
-            guard touches.contains(touch) else { return }
-            endContact(control, touch: touch, at: touch.location(in: control))
-        }
-
-        @objc private func touchCancelled(_ control: UISegmentedControl) {
-            cancelContact(control)
-        }
-
-        func beginContact(_ control: UISegmentedControl, touch: UITouch, at point: CGPoint) {
-            guard contact == nil, control.isEnabled, segment(at: point, in: control) != nil else { return }
-            isFinishingContact = false
-            contact = Contact(touch: touch, items: displayedItems, initialSelection: selection.wrappedValue)
-            moveContact(control, touch: touch, to: point)
-        }
-
-        func moveContact(_ control: UISegmentedControl, touch: UITouch, to point: CGPoint) {
-            guard let contact, contact.touch === touch, !contact.invalidated else { return }
-            guard let index = segment(at: point, in: control) else {
-                restoreSelection(control)
-                return
-            }
-            control.selectedSegmentIndex = index
-        }
-
-        func endContact(_ control: UISegmentedControl, touch: UITouch, at point: CGPoint) {
-            guard let contact, contact.touch === touch else { return }
-            if !contact.invalidated,
-               contact.initialSelection == selection.wrappedValue,
-               contact.items == displayedItems,
-               let index = segment(at: point, in: control) {
-                selection.wrappedValue = contact.items[index].tool
-            }
-            finishContact(control)
-        }
-
-        func cancelContact(_ control: UISegmentedControl) {
-            finishContact(control)
         }
 
         private func finishContact(_ control: UISegmentedControl) {
             contact = nil
-            isFinishingContact = true
-            restoreSelection(control)
-            // Rebuild a deferred configuration only after UIKit has finished the touch event.
-            DispatchQueue.main.async { [weak self, weak control] in
-                guard let self, let control, self.contact == nil, !control.isTracking else { return }
-                self.isFinishingContact = false
-                if let pending = self.pendingRender {
-                    self.update(control, items: pending.items, selection: self.selection,
-                                size: pending.size, withFooter: pending.withFooter, scale: pending.scale)
-                } else {
-                    self.restoreSelection(control)
-                }
+            if let pending = pendingRender {
+                update(control, items: pending.items, selection: selection,
+                       size: pending.size, withFooter: pending.withFooter, scale: pending.scale)
+            } else {
+                restoreSelection(control)
             }
         }
 
