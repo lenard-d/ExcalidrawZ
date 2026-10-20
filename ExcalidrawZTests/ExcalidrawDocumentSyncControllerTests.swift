@@ -202,7 +202,9 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         try await fixture.installFailure()
         try await fixture.setScene(3)
         try await fixture.recordDirtyScene()
-        await controller.flushPendingDirtySnapshot(reason: "sceneBackground", force: true)
+        let failedFlush = Task { await controller.flushPendingDirtySnapshot(reason: "sceneBackground", force: true) }
+        fixture.cancelOnClose(failedFlush)
+        try await boundedSaveTestValue(failedFlush)
         XCTAssertTrue(controller.hasPendingDirtySnapshot)
         XCTAssertTrue(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
         let oldDisk = try await fixture.libraryElementIDs()
@@ -210,11 +212,15 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         XCTAssertTrue(errors.contains { $0.domain == NSCocoaErrorDomain && $0.code == CocoaError.fileWriteNoPermission.rawValue })
         let mirror = try fixture.scene(from: XCTUnwrap(fixture.model.file?.content))
         XCTAssertEqual((mirror["elements"] as? [[String: Any]])?.first?["id"] as? String, "revision-3")
-        let accepted = await fixture.state.requestActiveFileChange(nil)
+        let close = Task { await fixture.state.requestActiveFileChange(nil) }
+        fixture.cancelOnClose(close)
+        let accepted = try await boundedSaveTestValue(close)
         XCTAssertFalse(accepted)
         XCTAssertEqual(fixture.state.currentActiveFile?.id, owner.fileID)
         try await fixture.clearControl()
-        await controller.flushPendingDirtySnapshot(reason: "retry", force: true)
+        let retry = Task { await controller.flushPendingDirtySnapshot(reason: "retry", force: true) }
+        fixture.cancelOnClose(retry)
+        try await boundedSaveTestValue(retry)
         XCTAssertFalse(controller.hasPendingDirtySnapshot)
         let retried = try await fixture.libraryElementIDs()
         XCTAssertEqual(retried, ["revision-3"])
@@ -225,6 +231,8 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         let fixture = try await CanvasControllerFixture.open(library: true)
         addTeardownBlock { await fixture.close() }
         let controller = fixture.core.documentSyncController
+        var errors: [NSError] = []
+        fixture.core.publishError = { errors.append($0 as NSError) }
         let control = LibrarySaveControl(phase: .beforeStorage)
         addTeardownBlock { await control.release() }
         try await fixture.install(control)
@@ -236,12 +244,17 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         let latest = Task { try await fixture.sendFullScene() }
         fixture.cancelOnClose(latest)
         try await boundedSaveTestValue(latest)
-        await controller.flushPendingDirtySnapshot(reason: "confirmLatest", force: true)
+        let confirm = Task { await controller.flushPendingDirtySnapshot(reason: "confirmLatest", force: true) }
+        fixture.cancelOnClose(confirm)
+        try await boundedSaveTestValue(confirm)
         XCTAssertFalse(controller.hasPendingDirtySnapshot)
         let newestDisk = try await fixture.libraryElementIDs()
         XCTAssertEqual(newestDisk, ["revision-2"])
         await control.release()
         try await boundedSaveTestValue(old)
+        let resumed = await control.resumedAfterRelease
+        XCTAssertTrue(resumed, "The selected old call must resume after explicit release, not time out")
+        XCTAssertTrue(errors.isEmpty, "A caught controller error cannot substitute for an old write completing")
         let finalDisk = try await fixture.libraryElementIDs()
         XCTAssertEqual(finalDisk, ["revision-2"], "A late old call must not replace newer durable content")
         XCTAssertFalse(controller.hasPendingDirtySnapshot)
@@ -293,7 +306,9 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         try await boundedSaveTestValue(old)
         XCTAssertTrue(controller.hasPendingDirtySnapshot, "The older receipt cannot acknowledge a newer capture")
         try await fixture.clearControl()
-        await controller.flushPendingDirtySnapshot(reason: "retryLatest", force: true)
+        let retry = Task { await controller.flushPendingDirtySnapshot(reason: "retryLatest", force: true) }
+        fixture.cancelOnClose(retry)
+        try await boundedSaveTestValue(retry)
         let persisted = try await fixture.libraryElementIDs()
         XCTAssertEqual(persisted, ["revision-6"])
         XCTAssertFalse(controller.hasPendingDirtySnapshot)
@@ -305,11 +320,13 @@ private actor LibrarySaveControl {
     let gate = SaveTestGate()
     let phase: FileRepository.CanvasSaveTestPhase
     private var entered = false
+    private(set) var resumedAfterRelease = false
     init(phase: FileRepository.CanvasSaveTestPhase) { self.phase = phase }
     func visit(_ phase: FileRepository.CanvasSaveTestPhase) async throws {
         guard phase == self.phase, !entered else { return }
         entered = true
         try await gate.pause()
+        resumedAfterRelease = true
     }
     func waitUntilPaused() async throws { try await gate.waitUntilPaused() }
     func release() async { await gate.release() }
@@ -379,7 +396,7 @@ private final class CanvasControllerFixture {
     let original = Data(##"{"type":"excalidraw","version":2,"source":"native-test","elements":[],"files":{},"appState":{"gridSize":10,"viewBackgroundColor":"#ffffff"}}"##.utf8)
     private let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1024, height: 768))
     private(set) var core: ExcalidrawCore!
-    private var taskCleanup: [@MainActor () async -> Void] = []
+    private var taskCleanup: [@MainActor () async -> Bool] = []
 
     private init() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -469,7 +486,15 @@ private final class CanvasControllerFixture {
     func cancelOnClose<Value: Sendable, Failure: Error>(_ task: Task<Value, Failure>) {
         taskCleanup.append {
             task.cancel()
-            _ = try? await boundedSaveTestValue(task)
+            do {
+                _ = try await boundedSaveTestValue(task)
+                return true
+            } catch SaveTestWaitError.timedOut {
+                return false
+            } catch {
+                // A completed task error still confirms that the task has stopped.
+                return true
+            }
         }
     }
 
@@ -478,12 +503,18 @@ private final class CanvasControllerFixture {
         if core != nil {
             try? await evaluate("window.releaseLoad?.(); window.releaseImage?.();")
         }
-if let libraryFile {
+        if let libraryFile {
             try? await PersistenceController.shared.fileRepository.setCanvasSaveTestControl(
                 fileObjectID: libraryFile.objectID, expectedName: libraryName, operation: nil
             )
         }
-        for cleanup in taskCleanup { await cleanup() }
+        for cleanup in taskCleanup {
+            guard await cleanup() else {
+                Self.retainedFixtures.append(self)
+                XCTFail("Synthetic task completion unconfirmed; live owner and data retained at \(directory.path)")
+                return
+            }
+        }
         let session = state.externalSaveSessionID
         var stage = "flush the original canvas owner"
         do {
@@ -535,7 +566,7 @@ if let libraryFile {
                 XCTFail("Synthetic failed save retained for diagnosis at \(directory.path)")
                 return
             }
-if let libraryFile {
+            if let libraryFile {
                 try await PersistenceController.shared.fileRepository.delete(
                     fileObjectID: libraryFile.objectID, forcePermanently: true
                 )
