@@ -104,14 +104,18 @@ final class PageModeUITests: XCTestCase {
         }
         let newDrawing = app.buttons["New draw"].firstMatch
         let openedSidebar = !newDrawing.isHittable
-        let sidebar = app.buttons.matching(NSPredicate(format: "label ==[c] %@", "Toggle sidebar")).firstMatch
+        let sidebar = app.buttons["Show Sidebar"].firstMatch
         if openedSidebar {
             try requireHittable(sidebar, in: app, step: "Show the sidebar to create a new drawing")
             sidebar.tap()
         }
         try requireHittable(newDrawing, in: app, step: "Create a new drawing without opening existing drawings")
         newDrawing.tap()
-        if openedSidebar, newDrawing.isHittable { sidebar.tap() }
+        if openedSidebar, newDrawing.isHittable {
+            let hideSidebar = app.buttons["Hide Sidebar"].firstMatch
+            try requireHittable(hideSidebar, in: app, step: "Restore the hidden sidebar after creating the drawing")
+            hideSidebar.tap()
+        }
         return app
     }
 
