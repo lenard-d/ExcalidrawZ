@@ -240,7 +240,8 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             return
         }
         share.tap()
-        captureEditorPhase(app, name: "STOP after Share tap, inspect presentation before choosing a route")
+        assertShareMenuDismisses(in: app)
+        assertStyleRespondsAndRestores(in: app)
     }
 
     func testExploreFileProtectionPresentation() {
@@ -268,7 +269,68 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             return
         }
         protection.tap()
-        captureEditorPhase(app, name: "STOP after file protection tap, inspect prompt before cancellation")
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Lock File"].exists)
+        XCTAssertFalse(app.buttons["Lock File"].firstMatch.isEnabled)
+        cancel.tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: cancel
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        XCTAssertTrue(app.segmentedControls["toolbar.toolPicker"].isHittable)
+        XCTAssertTrue(menu.isHittable)
+        assertStyleRespondsAndRestores(in: app)
+        captureEditorPhase(app, name: "File protection cancelled, editor response restored")
+    }
+
+    func testShareMenuDismissesAndReturnsToEditor() {
+        let app = openSyntheticDrawing()
+        let share = app.buttons["toolbar.share"].firstMatch
+        XCTAssertTrue(share.waitForExistence(timeout: 15))
+        XCTAssertTrue(share.isHittable)
+        captureEditorPhase(app, name: "Settled B1 toolbar before independent Share")
+        share.tap()
+        assertShareMenuDismisses(in: app)
+        assertStyleRespondsAndRestores(in: app)
+        captureEditorPhase(app, name: "Share menu dismissed, Style responds and returns to its original state")
+    }
+
+    private func assertShareMenuDismisses(in app: XCUIApplication) {
+        let image = app.buttons["Image"].firstMatch
+        let file = app.buttons["File"].firstMatch
+        let pdf = app.buttons["PDF"].firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        XCTAssertTrue(image.isHittable)
+        XCTAssertTrue(file.isHittable)
+        XCTAssertTrue(pdf.isHittable)
+        captureEditorPhase(app, name: "Share presents the observed Image, File and PDF menu")
+        // The observed Share menu occupies only the upper-right corner.
+        let window = app.windows.firstMatch
+        let outside = CGPoint(x: window.frame.midX, y: window.frame.midY)
+        XCTAssertFalse(image.frame.contains(outside) || file.frame.contains(outside) || pdf.frame.contains(outside))
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !image.exists && !file.exists && !pdf.exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        XCTAssertTrue(app.buttons["toolbar.share"].firstMatch.isHittable)
+    }
+
+    private func assertStyleRespondsAndRestores(in app: XCUIApplication) {
+        let style = app.buttons["toolbar.style"].firstMatch
+        XCTAssertTrue(style.isHittable)
+        let originalStyle = style.isSelected
+        style.tap()
+        let changed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: !originalStyle)), object: style
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
+        style.tap()
+        let restored = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: originalStyle)), object: style
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
     }
 
     func testUndoThenTapOpensRedoMenu() {
