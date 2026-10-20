@@ -47,6 +47,10 @@ final class PageModeUITests: XCTestCase {
         try requireHittable(more, in: app, step: "Exact current synthetic drawing title menu")
         more.tap()
         capture(app, step: "STOP: current synthetic drawing title menu before rename")
+        let rename = app.buttons["Rename"].firstMatch
+        try requireHittable(rename, in: app, step: "Observed current drawing Rename action")
+        rename.tap()
+        capture(app, step: "STOP: current synthetic drawing Rename presentation")
     }
 
     func testExploreSyntheticPageDuplicateAndReopenRoute() throws {
