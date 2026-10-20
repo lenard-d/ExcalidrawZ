@@ -293,7 +293,29 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             return
         }
         protection.tap()
-        captureEditorPhase(app, name: "STOP after file protection tap, inspect prompt before cancellation")
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Lock File"].exists)
+        XCTAssertFalse(app.buttons["Lock File"].firstMatch.isEnabled)
+        cancel.tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: cancel
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        XCTAssertTrue(app.segmentedControls["toolbar.toolPicker"].isHittable)
+        XCTAssertTrue(menu.isHittable)
+        captureEditorPhase(app, name: "File protection cancelled, editor restored")
+    }
+
+    func testExploreShareWithoutSearchPrerequisite() {
+        let app = openSyntheticDrawing()
+        let share = app.buttons["toolbar.share"].firstMatch
+        XCTAssertTrue(share.waitForExistence(timeout: 15))
+        XCTAssertTrue(share.isHittable)
+        captureEditorPhase(app, name: "Settled B1 toolbar before independent Share")
+        share.tap()
+        // Capture the public menu before selecting an unobserved export route.
+        captureEditorPhase(app, name: "STOP independent Share menu before choosing destination")
     }
 
     func testUndoThenTapOpensRedoMenu() {
