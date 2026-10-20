@@ -31,7 +31,8 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
             let items = presentation.pickerItems(for: sizeClass)
             ExcalidrawToolbarMoreToolsMenu(
                 overflowItems: sizeClass == .dense ? presentation.items : items.secondary,
-                usesPrincipalLabel: true
+                usesPrincipalLabel: true,
+                usesStableLabel: true
             ) {
                 Section {
                     penModeToggle
@@ -78,28 +79,43 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
     }
 
     private var undoMenu: some View {
-        Menu {
-            Button {
-                run { try await core.performUndo() }
-            } label: {
-                Label(.localizable(.generalButtonUndo), systemImage: "arrow.uturn.backward")
+        Group {
+            if core.canUndo {
+                Menu {
+                    undoActions
+                } label: {
+                    Label(.localizable(.generalButtonUndo), systemImage: "arrow.uturn.backward")
+                } primaryAction: {
+                    run { try await core.performUndo() }
+                }
+            } else {
+                Menu {
+                    undoActions
+                } label: {
+                    Label(.localizable(.generalButtonUndo), systemImage: "arrow.uturn.backward")
+                }
             }
-            .disabled(!core.canUndo)
-            .accessibilityIdentifier("toolbar.undoAction")
-            Button {
-                run { try await core.performRedo() }
-            } label: {
-                Label(.localizable(.generalButtonRedo), systemImage: "arrow.uturn.forward")
-            }
-            .disabled(!core.canRedo)
-            .accessibilityIdentifier("toolbar.redoAction")
-        } label: {
-            Label(.localizable(.generalButtonUndo), systemImage: "arrow.uturn.backward")
-        } primaryAction: {
-            if core.canUndo { run { try await core.performUndo() } }
         }
         .disabled(!core.canUndo && !core.canRedo)
         .accessibilityIdentifier("toolbar.undo")
+    }
+
+    @ViewBuilder
+    private var undoActions: some View {
+        Button {
+            run { try await core.performUndo() }
+        } label: {
+            Label(.localizable(.generalButtonUndo), systemImage: "arrow.uturn.backward")
+        }
+        .disabled(!core.canUndo)
+        .accessibilityIdentifier("toolbar.undoAction")
+        Button {
+            run { try await core.performRedo() }
+        } label: {
+            Label(.localizable(.generalButtonRedo), systemImage: "arrow.uturn.forward")
+        }
+        .disabled(!core.canRedo)
+        .accessibilityIdentifier("toolbar.redoAction")
     }
 
     private var zoomMenu: some View {

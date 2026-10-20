@@ -242,6 +242,35 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 5))
     }
 
+    func testUndoThenTapOpensRedoMenu() {
+        let app = openSyntheticDrawing()
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let rectangle = tool(named: "Rectangle", in: control)
+        XCTAssertTrue(rectangle.isHittable)
+        rectangle.tap()
+        assertSelection(rectangle, control: control)
+        let canvas = app.webViews.firstMatch
+        drag(in: canvas, from: CGVector(dx: 0.5, dy: 0.4), to: CGVector(dx: 0.7, dy: 0.6))
+        captureEditorPhase(app, name: "Rectangle before Undo, inspect canvas result")
+        let undo = app.buttons["toolbar.undo"].firstMatch
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: undo)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 5), .completed)
+        undo.tap()
+        captureEditorPhase(app, name: "After Undo, inspect rectangle removal")
+        undo.tap()
+        let redo = app.buttons["toolbar.redoAction"].firstMatch
+        XCTAssertTrue(redo.waitForExistence(timeout: 5), "A tap must open the menu when only Redo is available")
+        XCTAssertTrue(redo.isEnabled)
+        XCTAssertFalse(app.buttons["toolbar.undoAction"].firstMatch.isEnabled)
+        captureEditorPhase(app, name: "Redo-only menu opened with one tap")
+        redo.tap()
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: redo)
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed)
+        XCTAssertTrue(undo.isEnabled)
+        captureEditorPhase(app, name: "After Redo, inspect rectangle restoration")
+    }
+
     func testStyleHiddenWithoutSelectionStaysHiddenWhenSelectingANewShape() {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
@@ -257,7 +286,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(style.isHittable)
         // A fresh app starts with Style shown. Hide it before any panel exists.
         style.tap()
-        captureStylePhase(app, name: "Style off with Selection and no panel")
+        captureEditorPhase(app, name: "Style off with Selection and no panel")
 
         let rectangle = tool(named: "Rectangle", in: control)
         XCTAssertTrue(rectangle.isHittable)
@@ -267,18 +296,25 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         drag(in: canvas, from: CGVector(dx: 0.5, dy: 0.4), to: CGVector(dx: 0.7, dy: 0.6))
         cursor.tap()
         assertSelection(cursor, control: control)
-        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)).tap()
+        // The rectangle is transparent. Select its straight left border.
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(panel.waitForExistence(timeout: 5), "A selected shape must mount its style region")
         XCTAssertFalse(panel.isHittable, "Selection must use stored Style state without another Style request")
-        captureStylePhase(app, name: "New shape selected while Style remains off")
+        let unexpectedlyShown = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"), object: panel
+        )
+        unexpectedlyShown.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [unexpectedlyShown], timeout: 2), .completed)
+        captureEditorPhase(app, name: "New shape selected while Style remains off")
 
         style.tap()
         let shown = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: panel)
         XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 5), .completed)
-        captureStylePhase(app, name: "One Style press shows the selected shape panel")
+        captureEditorPhase(app, name: "One Style press shows the selected shape panel")
         style.tap()
         let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: panel)
         XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
-        captureStylePhase(app, name: "One more Style press hides the selected shape panel")
+        captureEditorPhase(app, name: "One more Style press hides the selected shape panel")
     }
 
     private func revealMenuAction(_ action: XCUIElement, in app: XCUIApplication) {
@@ -290,7 +326,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertTrue(action.isHittable, "The secondary menu must scroll to its command")
     }
 
-    private func captureStylePhase(_ app: XCUIApplication, name: String) {
+    private func captureEditorPhase(_ app: XCUIApplication, name: String) {
         capture(app, name: name)
         let hierarchy = XCTAttachment(string: app.debugDescription)
         hierarchy.name = "\(name), accessibility tree"
