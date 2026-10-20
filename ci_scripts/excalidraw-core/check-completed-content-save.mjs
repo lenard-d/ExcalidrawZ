@@ -93,9 +93,11 @@ async function editor() {
     },
     advance(duration) {
       const target = now + duration;
+      let remainingCallbacks = 10000;
       while (true) {
         const due = [...timers].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
         if (!due) break;
+        assert.ok(remainingCallbacks-- > 0, "Timer drain must make bounded progress");
         timers.delete(due[0]);
         now = due[1].at;
         due[1].callback();
@@ -117,7 +119,9 @@ test("An already-reported final scene still emits one timing-only completion", a
   page.emit([element(2)], { cursorButton: "up", newElement: null });
   const content = page.messages().at(-1);
   assert.equal(content.contentDirty, true);
-  page.advance(1000);
+  page.advance(999);
+  assert.equal(completions(page).length, 0);
+  page.advance(1);
   const completion = completions(page);
   assert.equal(completion.length, 1);
   assert.equal(completion[0].completedContentRevision, content.revision);
@@ -125,6 +129,62 @@ test("An already-reported final scene still emits one timing-only completion", a
   assert.equal(completion[0].appStateDirty, false);
   page.advance(10000);
   assert.equal(completions(page).length, 1);
+});
+
+test("A later finalized update restarts the exact1000ms quiet window", async () => {
+  const page = await editor();
+  page.emit([element(1)]);
+  page.advance(500);
+  page.emit([element(2)]);
+  page.advance(499);
+  assert.equal(completions(page).length, 0);
+  page.advance(1);
+  assert.equal(page.messages().filter((message) => message.contentDirty).length, 2);
+  page.advance(499);
+  assert.equal(completions(page).length, 0);
+  page.advance(1);
+  assert.equal(completions(page).length, 1);
+  assert.equal(completions(page)[0].completedContentRevision, page.messages().filter((message) => message.contentDirty).at(-1).revision);
+});
+
+test("Ordinary leading and trailing delivery keep the exact1000ms cadence", async () => {
+  const page = await editor();
+  const active = { cursorButton: "down", newElement: element(1) };
+  page.emit([element(1)], active);
+  assert.equal(page.messages().length, 1);
+  page.advance(100);
+  page.emit([element(2)], active);
+  page.advance(899);
+  assert.equal(page.messages().length, 1);
+  page.advance(1);
+  assert.equal(page.messages().length, 2);
+  page.emit([element(3)], active);
+  page.advance(999);
+  assert.equal(page.messages().length, 2);
+  page.advance(1);
+  assert.equal(page.messages().length, 3);
+  assert.equal(completions(page).length, 0);
+});
+
+test("Resumed app-state-only contact immediately withdraws a posted completion once", async () => {
+  const page = await editor();
+  page.emit([element(1)]);
+  page.advance(1000);
+  assert.equal(completions(page).length, 1);
+  const withdrawals = () => page.messages().filter((message) => message.contentInteractionActive && !message.contentDirty && !message.appStateDirty);
+  page.emit([element(1)], { cursorButton: "down" });
+  assert.equal(withdrawals().length, 1);
+  assert.equal(withdrawals()[0].completedContentRevision, undefined);
+  page.emit([element(1)], { cursorButton: "down" });
+  assert.equal(withdrawals().length, 1);
+  page.advance(1000);
+  assert.equal(completions(page).length, 1);
+  page.emit([element(1)], { cursorButton: "up" });
+  page.advance(999);
+  assert.equal(completions(page).length, 1);
+  page.advance(1);
+  assert.equal(completions(page).length, 2);
+  assert.equal(completions(page)[1].completedContentRevision, completions(page)[0].completedContentRevision);
 });
 
 test("Continuous contact retains ordinary cadence and has no premature completion", async () => {

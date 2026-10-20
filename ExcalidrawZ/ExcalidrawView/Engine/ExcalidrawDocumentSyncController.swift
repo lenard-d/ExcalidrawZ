@@ -377,7 +377,6 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
 
     struct StateChangedAdmission {
         let capture: CanvasSaveCapture?
-        let completionSession: CanvasMutationSession?
     }
 
     /// WebKit calls this before creating the asynchronous save task.
@@ -390,10 +389,25 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
         }
         let intent: CanvasSaveCoverage = data.fileData != nil || data.metadata?.shouldPullContentSnapshot == true
             ? .fullScene : .appState
-        return StateChangedAdmission(
-            capture: isDirty ? core.parent?.fileState.captureCanvasSave(intent: intent) : nil,
-            completionSession: data.metadata?.completedContentRevision != nil ? captureCanvasMutationSession() : nil
-        )
+        let capture = isDirty ? core.parent?.fileState.captureCanvasSave(intent: intent) : nil
+        if let metadata = data.metadata, data.fileData == nil {
+            // Keep full-content scheduling intent even if a later metadata Task supersedes this capture.
+            snapshotCoordinator.recordAdmittedContent(metadata, capture: capture)
+            // Timing controls follow bridge admission order, before asynchronous save Tasks can reorder them.
+            if let session = captureCanvasMutationSession(),
+               metadata.currentFileId == session.fileID,
+               let revision = metadata.revision, revision >= 0 {
+                if metadata.contentInteractionActive == true {
+                    snapshotCoordinator.withdrawCompletedContentCommit(fileID: session.fileID)
+                } else if let completedRevision = metadata.completedContentRevision,
+                          completedRevision >= 0, completedRevision <= revision {
+                    snapshotCoordinator.requestCompletedContentCommit(
+                        fileID: session.fileID, revision: completedRevision
+                    )
+                }
+            }
+        }
+        return StateChangedAdmission(capture: capture)
     }
 
     @MainActor
@@ -418,16 +432,6 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
                 savingType: core.parent?.savingType,
                 capture: capture
             )
-            if let completedRevision = metadata.completedContentRevision,
-               completedRevision >= 0,
-               let revision = metadata.revision, completedRevision <= revision,
-               let session = admission.completionSession,
-               metadata.currentFileId == session.fileID,
-               isCurrentCanvasMutationSession(session) {
-                snapshotCoordinator.requestCompletedContentCommit(
-                    fileID: session.fileID, revision: completedRevision
-                )
-            }
             return
         }
 

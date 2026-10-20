@@ -13,6 +13,11 @@ It requests the native scheduler and does not save from a pointer event.
 It waits for 1000ms of quiet after a finalized scene update. Ordinary web
 notifications keep their 1s throttle, and active-input full snapshots keep
 their 5s interval. A separated burst can add one trailing snapshot and write.
+If input resumes after a hint was posted, one small control message withdraws
+its unstarted request. It does not scan the scene, create dirty work, cancel
+an actual write or change the ordinary notification throttle. Full-content
+scheduling intent is registered at native message admission, before metadata
+save tasks can supersede it. Timing controls follow that same admission order.
 This is not a hard durable-save deadline. Instrumented simulator baselines
 measured about 0.55s per 10000-element snapshot and 1.1s for its final save and
 element-readback path. Candidate timing and input cost still need native checks.

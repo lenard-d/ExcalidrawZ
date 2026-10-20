@@ -116,6 +116,18 @@ final class ExcalidrawDocumentContentSnapshotScheduler: @unchecked Sendable {
         scheduleCommitIfNeededLocked()
     }
 
+    /// Resumed input withdraws only a request that has not started. Pending content and writer outcomes remain.
+    func withdrawCompletedContentCommit(fileID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard pendingFileID == fileID, completedContentRevision != nil else { return }
+        completedContentRevision = nil
+        commitTask?.cancel()
+        commitTask = nil
+        scheduledGeneration &+= 1
+        scheduleCommitIfNeededLocked()
+    }
+
     func hasPendingDirtySnapshot() -> Bool {
         lock.lock()
         let hasPending = pendingRevision != nil || hasPendingWithoutRevision

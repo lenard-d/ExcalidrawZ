@@ -2,6 +2,25 @@ import XCTest
 @testable import ExcalidrawZ
 
 final class ExcalidrawDocumentContentSnapshotSchedulerTests: XCTestCase {
+    func testInteractionWithdrawalKeepsInheritedContentAndInFlightWriterWithoutEarlyTrailingCapture() async throws {
+        let unexpected = expectation(description: "Resumed app-state-only input retains the periodic deadline")
+        unexpected.isInverted = true
+        let scheduler = ExcalidrawDocumentContentSnapshotScheduler { _ in unexpected.fulfill() }
+        defer { scheduler.reset() }
+        scheduler.recordPendingContentDirty(fileID: "owner", revision: 7)
+        XCTAssertNotNil(scheduler.takeScheduledCommitState())
+        scheduler.recordPendingContentDirty(fileID: "owner", revision: 8)
+        scheduler.requestCompletedContentCommit(fileID: "owner", revision: 8)
+        scheduler.recordLatestRevision(9)
+        scheduler.withdrawCompletedContentCommit(fileID: "owner")
+        XCTAssertNil(scheduler.takeScheduledCommitState(), "The actual writer still owns its outcome")
+        scheduler.markCommitted(snapshotRevision: 7, fallbackRevision: nil)
+        scheduler.completeScheduledCommit()
+        await fulfillment(of: [unexpected], timeout: 0.1)
+        XCTAssertEqual(scheduler.takeFlushState()?.expectedRevision, 8)
+        XCTAssertTrue(scheduler.hasPendingDirtySnapshot())
+    }
+
     func testCompletionAdvancesPendingRevisionWithoutWaitingForPeriodicThrottle() async throws {
         let called = expectation(description: "Completed content is scheduled")
         let recorded = ScheduledContentCommits()

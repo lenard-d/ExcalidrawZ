@@ -70,6 +70,14 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
     var hasPendingDirtySnapshot: Bool { delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingSave == true || contentScheduler.hasPendingDirtySnapshot() || appStateSaver.hasPendingSave || programmaticCommitter.hasPendingSave }
 
     @MainActor
+    func recordAdmittedContent(_ metadata: ExcalidrawCore.StateChangedMetadata, capture: CanvasSaveCapture?) {
+        guard metadata.hasAnyDirtyChanges, metadata.shouldPullContentSnapshot, let capture else { return }
+        try? capture.withAdmission {
+            contentScheduler.recordPendingContentDirty(fileID: capture.owner.fileID, revision: metadata.revision)
+        }
+    }
+
+    @MainActor
     func handleStateChangedMetadata(
         _ metadata: ExcalidrawCore.StateChangedMetadata,
         currentFileID: String?,
@@ -97,10 +105,6 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
             }
 
             appStateSaver.clear()
-            contentScheduler.recordPendingContentDirty(
-                fileID: metadata.currentFileId ?? currentFileID,
-                revision: metadata.revision
-            )
         }
     }
 
@@ -108,6 +112,10 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
 
     func requestCompletedContentCommit(fileID: String, revision: Int) {
         contentScheduler.requestCompletedContentCommit(fileID: fileID, revision: revision)
+    }
+
+    func withdrawCompletedContentCommit(fileID: String) {
+        contentScheduler.withdrawCompletedContentCommit(fileID: fileID)
     }
 
     @MainActor
