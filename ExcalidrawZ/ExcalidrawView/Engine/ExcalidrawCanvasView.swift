@@ -251,6 +251,9 @@ struct ExcalidrawCanvasView: View {
                     arguments: ["enabled": enabled],
                     contentWorld: .page
                 )
+                if enabled {
+                    try await excalidrawCore.toggleActionsMenu(isPresented: toolState.isActionsMenuPresneted)
+                }
             } catch {
                 onError(error)
             }
