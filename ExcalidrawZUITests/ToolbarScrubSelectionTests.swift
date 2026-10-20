@@ -89,13 +89,22 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertEqual(originalFrame.height, menu.frame.height, accuracy: 1)
         XCTAssertGreaterThanOrEqual(originalFrame.height, 44)
 
+        let initialLockState = lock.isSelected
         lock.tap()
+        waitForSelectedState(!initialLockState, of: lock)
+        capture(app, name: "Tool lock after confirmed state change")
         XCTAssertEqual(lock.frame.width, originalFrame.width, accuracy: 1)
         XCTAssertEqual(lock.frame.height, originalFrame.height, accuracy: 1)
         lock.tap()
+        waitForSelectedState(initialLockState, of: lock)
+        capture(app, name: "Tool lock after restoring initial state")
         XCTAssertEqual(lock.frame.width, originalFrame.width, accuracy: 1)
         XCTAssertEqual(lock.frame.height, originalFrame.height, accuracy: 1)
 
+        let cursor = tool(named: "Selection", in: control)
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        XCTAssertFalse(tool(named: "Laser", in: control).exists)
         menu.tap()
         XCTAssertTrue(app.buttons["Mermaid to Excalidraw"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Math"].exists)
@@ -111,6 +120,19 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             }, object: control
         )
         XCTAssertEqual(XCTWaiter.wait(for: [noVisibleSelection], timeout: 3), .completed)
+        XCTAssertTrue(control.exists)
+        XCTAssertTrue((menu.value as? String)?.hasPrefix("Laser") == true)
+        capture(app, name: "Closed combined menu shows the active overflow tool")
+        menu.tap()
+        waitForSelectedState(true, of: tool(named: "Laser", in: app))
+        capture(app, name: "Combined menu confirms Laser selection")
+    }
+
+    private func waitForSelectedState(_ selected: Bool, of element: XCUIElement) {
+        let state = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: selected)), object: element
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [state], timeout: 3), .completed)
     }
 
     private func drag(in canvas: XCUIElement, from start: CGVector, to end: CGVector) {
@@ -171,11 +193,20 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         }
 
         let newDrawing = app.buttons["New draw"].firstMatch
+        let openedSidebar = !newDrawing.isHittable
+        let sidebar = app.buttons.matching(NSPredicate(format: "label ==[c] %@", "Toggle sidebar")).firstMatch
+        if openedSidebar {
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+            sidebar.tap()
+        }
         let ready = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "isHittable == true"), object: newDrawing
         )
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
         newDrawing.tap()
+        if openedSidebar, newDrawing.isHittable {
+            sidebar.tap()
+        }
         return app
     }
 }

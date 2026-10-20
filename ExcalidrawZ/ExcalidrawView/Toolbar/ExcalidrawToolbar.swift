@@ -168,6 +168,7 @@ struct ExcalidrawToolbar: View {
         }
         .help("\(String(localizable: .toolbarButtonLockToolHelp)) - Q")
         .accessibilityIdentifier("toolbar.toolLock")
+        .accessibilityAddTraits(toolState.isToolLocked ? .isSelected : [])
     }
 
     private var usesCombinedToolsMenu: Bool {
