@@ -24,6 +24,8 @@ struct ExcalidrawToolbar: View {
     @EnvironmentObject var toolState: ToolState
     @EnvironmentObject var layoutState: LayoutState
 
+    var usesExternalSecondaryMenu = false
+
     var body: some View {
         if fileState.currentActiveFile != nil {
             toolbar()
@@ -75,7 +77,8 @@ struct ExcalidrawToolbar: View {
     private func adaptiveToolPickerContent() -> some View {
         let toolOrder = appPreference.toolbarToolOrder
 
-        leadingTollsContent()
+        if !usesExternalSecondaryMenu {
+            leadingTollsContent()
 #if os(iOS)
             .apply { button in
                 if usesCombinedToolsMenu {
@@ -86,6 +89,7 @@ struct ExcalidrawToolbar: View {
             }
             .excalidrawToolbarSurface(.circle, padded: !usesCombinedToolsMenu)
 #endif
+        }
         ExcalidrawToolbarToolContainer { sizeClass in
             let presentation = ExcalidrawToolbarToolPresentation(order: toolOrder)
             let pickerItems = presentation.pickerItems(for: sizeClass)
@@ -131,7 +135,7 @@ struct ExcalidrawToolbar: View {
             }
 
 #if os(iOS)
-            if usesCombinedToolsMenu {
+            if usesCombinedToolsMenu && !usesExternalSecondaryMenu {
                 ExcalidrawToolbarMoreToolsMenu(
                     overflowItems: sizeClass == .dense ? presentation.items : pickerItems.secondary,
                     usesPrincipalLabel: true

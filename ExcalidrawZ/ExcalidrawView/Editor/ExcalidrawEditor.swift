@@ -265,9 +265,21 @@ struct ExcalidrawEditor: View {
             }
 #endif
 
+#if os(iOS)
+            if isInCollaborationSpace || !ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
+                isPad: UIDevice.current.userInterfaceIdiom == .pad,
+                horizontalSizeClass: containerHorizontalSizeClass,
+                containerWidth: containerSize.width
+            ) {
+                ExcalidrawTrailingControls()
+                    .opacity(isLoadingFile ? 0 : 1)
+                    .allowsHitTesting(!isLoadingFile)
+            }
+#else
             ExcalidrawTrailingControls()
                 .opacity(isLoadingFile ? 0 : 1)
                 .allowsHitTesting(!isLoadingFile)
+#endif
         }
         .readSize($editorContentSize)
         .overlay(alignment: .bottom) {
