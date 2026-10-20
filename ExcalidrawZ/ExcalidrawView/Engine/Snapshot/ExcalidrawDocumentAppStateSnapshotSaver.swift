@@ -108,6 +108,8 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
             }
             capture.acknowledgeDurable(coverage: .appState) { acknowledge(commitState.revision) }
             core.logger.debug("Committed background appState-only canvas update: \(reason) id=\(expectedFileID)")
+        } catch is CancellationError where !capture.isCurrent || Task.isCancelled {
+            return
         } catch {
             core.logger.error("Failed to apply background appState-only canvas update: \(error)")
             await reportExternalFailure(error, core: core)
@@ -303,6 +305,8 @@ final class ExcalidrawDocumentAppStateSnapshotSaver: @unchecked Sendable {
                 )
             }
             capture.acknowledgeDurable(coverage: .appState) { acknowledge(commitState.revision) }
+        } catch is CancellationError where !capture.isCurrent || Task.isCancelled {
+            return
         } catch {
             core.logger.error("Failed to apply appState-only canvas update: \(error)")
             await reportExternalFailure(error, core: core)
