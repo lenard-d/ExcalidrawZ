@@ -212,8 +212,7 @@ final class LockedContentStateStore: ObservableObject {
         if let activeManagedFile {
             await synchronizeLockState(
                 fileObjectID: activeManagedFile.objectID,
-                fileID: activeManagedFile.fileID,
-                fallback: .locked
+                fileID: activeManagedFile.fileID
             )
         }
     }
@@ -281,8 +280,7 @@ final class LockedContentStateStore: ObservableObject {
         for file in knownLockedFiles {
             await synchronizeLockState(
                 fileObjectID: file.fileObjectID,
-                fileID: file.id,
-                fallback: .locked
+                fileID: file.id
             )
         }
     }
@@ -309,19 +307,30 @@ final class LockedContentStateStore: ObservableObject {
         }
     }
 
-    @discardableResult
     private func synchronizeLockState(
         fileObjectID: NSManagedObjectID,
-        fileID: String,
-        fallback: FileContentLockState = .plaintext
-    ) async -> FileContentLockState {
-        let lockState = (try? await PersistenceController.shared.fileRepository
-            .fileContentLockState(fileObjectID: fileObjectID)) ?? fallback
+        fileID: String
+    ) async {
+        let lockState = try? await PersistenceController.shared.fileRepository
+            .fileContentLockState(fileObjectID: fileObjectID)
         cacheLockState(lockState, fileID: fileID)
-        return lockState
     }
 
-    private func cacheLockState(_ lockState: FileContentLockState, fileID: String) {
+    private func cacheLockState(_ lockState: FileContentLockState?, fileID: String) {
+        // A failed read cannot prove plaintext. Keep known protection, otherwise
+        // leave preview access unresolved until a successful lookup.
+        let resolvedLockState = lockState ?? (fileLockStates[fileID] == .locked ? .locked : nil)
+        guard let lockState = resolvedLockState else {
+            let hadPreviewLockState = fileLockStates.removeValue(forKey: fileID) != nil
+            updatePreviewLockState(fileID: fileID)
+            if activeFileID == fileID {
+                activeFileLockState = .locked
+            }
+            if hadPreviewLockState {
+                noteFilePreviewLockStateChanged()
+            }
+            return
+        }
         let previousDisplayLockState = displayLockStateIfKnown(for: fileID)
         let didChangeUnlockSession = noteUnlockSessionActiveIfNeeded(for: lockState)
 
@@ -439,12 +448,12 @@ final class LockedContentStateStore: ObservableObject {
         )
     }
 
-    private func loadLockState(for file: FileState.ActiveFile) async -> FileContentLockState {
+    private func loadLockState(for file: FileState.ActiveFile) async -> FileContentLockState? {
         guard case .file(let managedFile) = file else {
             return .plaintext
         }
 
-        return (try? await PersistenceController.shared.fileRepository
-            .fileContentLockState(fileObjectID: managedFile.objectID)) ?? .plaintext
+        return try? await PersistenceController.shared.fileRepository
+            .fileContentLockState(fileObjectID: managedFile.objectID)
     }
 }
