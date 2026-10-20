@@ -124,7 +124,14 @@ final class PageModeUITests: XCTestCase {
         try requireHittable(menu, in: app, step: "Public tool actions menu")
         menu.tap()
         let pages = app.buttons["Pages"].firstMatch
+        let actions = app.collectionViews.containing(.button, identifier: "Pages").firstMatch
+        for _ in 0..<3 {
+            if pages.isHittable { break }
+            try requireHittable(actions, in: app, step: "Open menu containing Pages")
+            actions.swipeUp(velocity: .slow)
+        }
         try requireHittable(pages, in: app, step: "Public Pages action")
+        capture(app, step: "Pages action after bounded public menu scroll")
         pages.tap()
     }
 
