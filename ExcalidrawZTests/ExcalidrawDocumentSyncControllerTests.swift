@@ -196,6 +196,7 @@ private final class CanvasControllerFixture {
     let toolState = ToolState()
     let exportState = ExportState()
     let preferences = CanvasPreferencesState()
+    let lockedContentState = LockedContentStateStore()
     let directory: URL
     let url: URL
     let original = Data(##"{"type":"excalidraw","version":2,"source":"native-test","elements":[],"files":{},"appState":{"gridSize":10,"viewBackgroundColor":"#ffffff"}}"##.utf8)
@@ -218,6 +219,7 @@ private final class CanvasControllerFixture {
             let view = ControllerTestCanvas(model: fixture.model)
                 .environmentObject(fixture.state).environmentObject(fixture.toolState)
                 .environmentObject(fixture.exportState).environmentObject(fixture.preferences)
+                .environmentObject(fixture.lockedContentState)
                 .environmentObject(AppPreference())
             fixture.window.rootViewController = UIHostingController(rootView: view)
             fixture.window.isHidden = false
