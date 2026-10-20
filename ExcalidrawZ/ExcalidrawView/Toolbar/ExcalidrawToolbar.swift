@@ -93,14 +93,14 @@ struct ExcalidrawToolbar: View {
         ExcalidrawToolbarToolContainer { sizeClass in
             let presentation = ExcalidrawToolbarToolPresentation(order: toolOrder)
             let pickerItems = usesExternalSecondaryMenu
-                ? presentation.configuredPickerItems(for: sizeClass)
+                ? (primary: presentation.configuredDirectItems, secondary: presentation.configuredOverflowItems)
                 : presentation.pickerItems(for: sizeClass)
             
-            if sizeClass != .dense || !usesCombinedToolsMenu {
+            if usesExternalSecondaryMenu || sizeClass != .dense || !usesCombinedToolsMenu {
                 HStack(spacing: 10) {
                     ZStack {
                         Color.clear
-                        if sizeClass == .dense {
+                        if sizeClass == .dense && !usesExternalSecondaryMenu {
                             denseContent(presentation.items)
                         } else {
                             segmentedPicker(
@@ -139,7 +139,8 @@ struct ExcalidrawToolbar: View {
 #if os(iOS)
             if usesCombinedToolsMenu {
                 ExcalidrawToolbarMoreToolsMenu(
-                    overflowItems: sizeClass == .dense ? presentation.items : pickerItems.secondary,
+                    overflowItems: sizeClass == .dense && !usesExternalSecondaryMenu
+                        ? presentation.items : pickerItems.secondary,
                     usesPrincipalLabel: true,
                     accessibilityIdentifier: usesExternalSecondaryMenu ? "toolbar.extraTools" : "toolbar.moreTools"
                 )
