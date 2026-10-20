@@ -83,31 +83,34 @@ struct ExcalidrawToolbar: View {
             let presentation = ExcalidrawToolbarToolPresentation(order: toolOrder)
             let pickerItems = presentation.pickerItems(for: sizeClass)
             
-            HStack(spacing: 10) {
-                ZStack {
-                    Color.clear
-                    if sizeClass == .dense {
-                        denseContent(presentation.items)
-                    } else {
-                        segmentedPicker(
-                            sizeClass: sizeClass,
-                            primaryPickerItems: pickerItems.primary,
-                            secondaryPickerItems: pickerItems.secondary
-                        )
+            if sizeClass != .dense || !usesCombinedToolsMenu {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Color.clear
+                        if sizeClass == .dense {
+                            denseContent(presentation.items)
+                        } else {
+                            segmentedPicker(
+                                sizeClass: sizeClass,
+                                primaryPickerItems: pickerItems.primary,
+                                secondaryPickerItems: pickerItems.secondary
+                            )
+                        }
                     }
                 }
-            }
 #if os(iOS)
-            .apply { picker in
-                if UIDevice.current.userInterfaceIdiom == .pad, sizeClass != .dense {
-                    picker
-                } else {
-                    picker.excalidrawToolbarSurface(.capsule)
+                .apply { picker in
+                    if UIDevice.current.userInterfaceIdiom == .pad, sizeClass != .dense {
+                        picker
+                    } else {
+                        picker.excalidrawToolbarSurface(.capsule)
+                    }
                 }
-            }
 #endif
+            }
             
             if #available(macOS 26.0, iOS 26.0, *),
+               !usesCombinedToolsMenu,
                !pickerItems.secondary.isEmpty,
                sizeClass != .dense,
                let tool = toolState.activatedTool {
@@ -119,12 +122,24 @@ struct ExcalidrawToolbar: View {
                 .excalidrawToolbarSurface(.circle)
 #endif
             }
+
+#if os(iOS)
+            if usesCombinedToolsMenu {
+                ExcalidrawToolbarMoreToolsMenu(
+                    overflowItems: sizeClass == .dense ? presentation.items : pickerItems.secondary,
+                    usesPrincipalLabel: true
+                )
+                .excalidrawToolbarSurface(.circle)
+            }
+#endif
         }
         
-        moreTools()
+        if !usesCombinedToolsMenu {
+            moreTools()
 #if os(iOS)
             .excalidrawToolbarSurface(.circle)
 #endif
+        }
         
     }
     
@@ -141,10 +156,26 @@ struct ExcalidrawToolbar: View {
                     Label(.localizable(.toolbarButtonLockToolLabel), systemSymbol: toolState.isToolLocked ? .lock : .lockOpen)
                 }
             }
+            .apply { label in
+                if usesCombinedToolsMenu {
+                    label.labelStyle(.iconOnly).frame(width: 32, height: 32)
+                } else {
+                    label
+                }
+            }
             .foregroundStyle(toolState.isToolLocked ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(HierarchicalShapeStyle.primary))
             .animation(.default, value: toolState.isToolLocked)
         }
         .help("\(String(localizable: .toolbarButtonLockToolHelp)) - Q")
+        .accessibilityIdentifier("toolbar.toolLock")
+    }
+
+    private var usesCombinedToolsMenu: Bool {
+#if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad
+#else
+        false
+#endif
     }
     
     @State private var lastActivatedSecondaryTool: ExcalidrawTool?
@@ -203,6 +234,7 @@ struct ExcalidrawToolbar: View {
                 segmentedPickerBackground(size: size)
             }
             if !usesSystemGlassToolbar,
+               !usesCombinedToolsMenu,
                !secondaryPickerItems.isEmpty,
                       sizeClass != .expanded,
                       let tool = toolState.activatedTool {

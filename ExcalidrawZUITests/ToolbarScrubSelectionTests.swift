@@ -76,6 +76,43 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         // Post-release assertions do not establish the selection shown during either held contact.
     }
 
+    func testStableLockAndCombinedToolActionsMenu() {
+        let app = openSyntheticDrawing()
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let lock = app.buttons["toolbar.toolLock"].firstMatch
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        XCTAssertTrue(lock.isHittable)
+        XCTAssertTrue(menu.isHittable)
+        let originalFrame = lock.frame
+        XCTAssertEqual(originalFrame.width, menu.frame.width, accuracy: 1)
+        XCTAssertEqual(originalFrame.height, menu.frame.height, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(originalFrame.height, 44)
+
+        lock.tap()
+        XCTAssertEqual(lock.frame.width, originalFrame.width, accuracy: 1)
+        XCTAssertEqual(lock.frame.height, originalFrame.height, accuracy: 1)
+        lock.tap()
+        XCTAssertEqual(lock.frame.width, originalFrame.width, accuracy: 1)
+        XCTAssertEqual(lock.frame.height, originalFrame.height, accuracy: 1)
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["Mermaid to Excalidraw"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Math"].exists)
+        XCTAssertTrue(app.buttons["Insert PDF"].exists)
+        // The preserved simulator order places Laser after the nine visible tools.
+        let laser = tool(named: "Laser", in: app)
+        XCTAssertTrue(laser.exists, "Configured overflow tools and insert actions must share this menu")
+        capture(app, name: "One menu contains configured overflow tools and insert actions")
+        laser.tap()
+        let noVisibleSelection = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                control.buttons.matching(NSPredicate(format: "isSelected == true")).count == 0
+            }, object: control
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [noVisibleSelection], timeout: 3), .completed)
+    }
+
     private func drag(in canvas: XCUIElement, from start: CGVector, to end: CGVector) {
         canvas.coordinate(withNormalizedOffset: start).press(
             forDuration: 0.05, thenDragTo: canvas.coordinate(withNormalizedOffset: end),
