@@ -6,7 +6,6 @@ import SwiftyAlert
 struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
     @ObservedObject var core: ExcalidrawCore
     @Environment(\.alertToast) private var alertToast
-    @EnvironmentObject private var appPreference: AppPreference
     @EnvironmentObject private var fileState: FileState
     @EnvironmentObject private var toolState: ToolState
     @EnvironmentObject private var layoutState: LayoutState
@@ -15,56 +14,57 @@ struct ExcalidrawIPadEditorActions<FileProtection: View>: View {
 
     var body: some View {
         undoMenu
-        Button {
-            toolState.toggleActionsMenu()
-        } label: {
-            Label("Style", systemImage: "paintbrush.pointed")
-                .labelStyle(.iconOnly)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .accessibilityIdentifier("toolbar.style")
-        .accessibilityAddTraits(toolState.isActionsMenuPresneted ? .isSelected : [])
-
         ShareToolbarButton(usesNativeIPadControlSize: true)
             .menuStyle(.button)
             .buttonStyle(.plain)
             .fixedSize()
             .accessibilityIdentifier("toolbar.share")
 
-        ExcalidrawToolbarToolContainer { sizeClass in
-            let presentation = ExcalidrawToolbarToolPresentation(order: appPreference.toolbarToolOrder)
-            let items = presentation.pickerItems(for: sizeClass)
-            ExcalidrawToolbarMoreToolsMenu(
-                overflowItems: sizeClass == .dense ? presentation.items : items.secondary,
-                usesPrincipalLabel: true,
-                usesStableLabel: true
-            ) {
-                Section {
-                    penModeToggle
-                    Toggle(isOn: Binding(
-                        get: { toolState.isToolLocked },
-                        set: { enabled in
-                            if enabled != toolState.isToolLocked { toolState.toggleToolLock() }
-                        }
-                    )) {
-                        Label(.localizable(.toolbarButtonLockToolHelp), systemImage: "repeat")
+        Menu {
+            Section {
+                Toggle(isOn: Binding(
+                    get: { toolState.isActionsMenuPresneted },
+                    set: { toolState.toggleActionsMenu(isPresented: $0) }
+                )) {
+                    Label("Style", systemImage: "paintbrush.pointed")
+                }
+                .accessibilityIdentifier("toolbar.style")
+                penModeToggle
+                Toggle(isOn: Binding(
+                    get: { toolState.isToolLocked },
+                    set: { enabled in
+                        if enabled != toolState.isToolLocked { toolState.toggleToolLock() }
                     }
-                    .accessibilityIdentifier("toolbar.toolLock")
+                )) {
+                    Label(.localizable(.toolbarButtonLockToolHelp), systemImage: "repeat")
                 }
-                Section {
-                    zoomMenu
-                    inspectorMenu
-                }
-                fileProtection()
+                .accessibilityIdentifier("toolbar.toolLock")
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .fixedSize()
+            Section {
+                zoomMenu
+                inspectorMenu
+            }
+            fileProtection()
+            Section {
+                Button {
+                    SettingsRouter.shared.requestOpen(.excalidraw)
+                } label: {
+                    Label("Drawing settings", systemImage: "gearshape")
+                }
+                .accessibilityIdentifier("toolbar.drawingSettings")
+            }
+        } label: {
+            Label("Settings", systemImage: "ellipsis.circle")
+                .labelStyle(.iconOnly)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
-        .labelStyle(.iconOnly)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .fixedSize()
+        .menuIndicator(.hidden)
+        .menuOrder(.fixed)
+        .accessibilityIdentifier("toolbar.moreTools")
     }
 
     private var penModeToggle: some View {

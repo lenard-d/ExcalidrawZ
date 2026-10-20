@@ -92,7 +92,9 @@ struct ExcalidrawToolbar: View {
         }
         ExcalidrawToolbarToolContainer { sizeClass in
             let presentation = ExcalidrawToolbarToolPresentation(order: toolOrder)
-            let pickerItems = presentation.pickerItems(for: sizeClass)
+            let pickerItems = usesExternalSecondaryMenu
+                ? presentation.configuredPickerItems(for: sizeClass)
+                : presentation.pickerItems(for: sizeClass)
             
             if sizeClass != .dense || !usesCombinedToolsMenu {
                 HStack(spacing: 10) {
@@ -135,10 +137,11 @@ struct ExcalidrawToolbar: View {
             }
 
 #if os(iOS)
-            if usesCombinedToolsMenu && !usesExternalSecondaryMenu {
+            if usesCombinedToolsMenu {
                 ExcalidrawToolbarMoreToolsMenu(
                     overflowItems: sizeClass == .dense ? presentation.items : pickerItems.secondary,
-                    usesPrincipalLabel: true
+                    usesPrincipalLabel: true,
+                    accessibilityIdentifier: usesExternalSecondaryMenu ? "toolbar.extraTools" : "toolbar.moreTools"
                 )
                 .menuStyle(.button)
                 .buttonStyle(.plain)

@@ -201,8 +201,11 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
         XCTAssertTrue(control.waitForExistence(timeout: 15))
         let menu = app.buttons["toolbar.moreTools"].firstMatch
+        let extraTools = app.buttons["toolbar.extraTools"].firstMatch
+        XCTAssertEqual(control.buttons.count, 9, "The preserved default configuration must keep nine direct tools")
         XCTAssertTrue(menu.isHittable)
-        XCTAssertTrue(app.buttons["toolbar.style"].isHittable)
+        XCTAssertTrue(extraTools.isHittable)
+        XCTAssertFalse(app.descendants(matching: .any)["toolbar.style"].exists)
         XCTAssertTrue(app.buttons["toolbar.share"].isHittable)
         XCTAssertTrue(app.buttons["toolbar.undo"].exists)
         XCTAssertFalse(app.buttons["toolbar.toolLock"].exists)
@@ -211,23 +214,25 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(menu.frame.width, 44)
         XCTAssertGreaterThanOrEqual(menu.frame.height, 44)
         XCTAssertEqual(menu.frame.midY, control.frame.midY, accuracy: 12)
+        XCTAssertGreaterThanOrEqual(extraTools.frame.minX, control.frame.maxX)
+        XCTAssertLessThan(extraTools.frame.maxX, app.buttons["toolbar.undo"].firstMatch.frame.minX)
         capture(app, name: "Native top bar before opening secondary actions")
 
         let cursor = tool(named: "Selection", in: control)
         cursor.tap()
         assertSelection(cursor, control: control)
         XCTAssertFalse(tool(named: "Laser", in: control).exists)
-        menu.tap()
+        extraTools.tap()
         XCTAssertTrue(app.buttons["Mermaid to Excalidraw"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Math"].exists)
         XCTAssertTrue(app.buttons["Insert PDF"].exists)
         XCTAssertTrue(app.buttons["toolbar.pages"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["toolbar.penMode"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["toolbar.toolLock"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toolbar.penMode"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["toolbar.toolLock"].exists)
         // The preserved simulator order places Laser after the nine visible tools.
         let laser = tool(named: "Laser", in: app)
-        XCTAssertTrue(laser.exists, "Configured overflow tools and insert actions must share this menu")
-        capture(app, name: "Secondary menu contains configured tools, insert actions and drawing modes")
+        XCTAssertTrue(laser.exists, "Configured overflow tools and insert actions must share the extra-tools menu")
+        capture(app, name: "Separate extra-tools menu contains overflow and insert actions")
         laser.tap()
         let noVisibleSelection = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
@@ -236,11 +241,19 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [noVisibleSelection], timeout: 3), .completed)
         XCTAssertTrue(control.exists)
-        XCTAssertTrue((menu.value as? String)?.hasPrefix("Laser") == true)
-        capture(app, name: "Closed combined menu shows the active overflow tool")
-        menu.tap()
+        XCTAssertTrue((extraTools.value as? String)?.hasPrefix("Laser") == true)
+        capture(app, name: "Extra-tools button follows the direct tools and reports Laser")
+        extraTools.tap()
         waitForSelectedState(true, of: tool(named: "Laser", in: app))
-        capture(app, name: "Combined menu confirms Laser selection")
+        laser.tap()
+        menu.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["toolbar.penMode"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["toolbar.toolLock"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["toolbar.style"].exists)
+        XCTAssertTrue(app.buttons["toolbar.drawingSettings"].exists)
+        XCTAssertFalse(app.buttons["toolbar.insertPDF"].exists)
+        XCTAssertFalse(tool(named: "Laser", in: app).exists)
+        capture(app, name: "Settings ellipsis retains Style and modes without overflow tools")
     }
 
     func testPenModeAndKeepToolActiveRemainIndependent() {
@@ -395,19 +408,12 @@ final class ToolbarScrubSelectionTests: XCTestCase {
     }
 
     private func assertStyleRespondsAndRestores(in app: XCUIApplication) {
-        let style = app.buttons["toolbar.style"].firstMatch
-        XCTAssertTrue(style.isHittable)
-        let originalStyle = style.isSelected
-        style.tap()
-        let changed = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: !originalStyle)), object: style
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
-        style.tap()
-        let restored = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isSelected == %@", NSNumber(value: originalStyle)), object: style
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        reopenMenuIfNeeded(menu, in: app)
+        let originalStyle = menuToggleIsOn("toolbar.style", in: app)
+        setMenuToggle("toolbar.style", to: !originalStyle, menu: menu, in: app)
+        setMenuToggle("toolbar.style", to: originalStyle, menu: menu, in: app)
+        dismissSettingsMenu(in: app)
     }
 
     func testUndoThenTapOpensRedoMenu() {
@@ -468,10 +474,8 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         XCTAssertFalse(duplicate.exists)
         XCTAssertFalse(delete.exists)
         XCTAssertFalse(panel.isHittable)
-        let style = app.buttons["toolbar.style"].firstMatch
-        XCTAssertTrue(style.isHittable)
         // A fresh app starts with Style shown. Hide it before any panel exists.
-        style.tap()
+        setStyle(false, in: app)
         assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "Style off with Selection and no panel")
 
@@ -497,16 +501,44 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "New shape selected while Style remains off")
 
-        style.tap()
+        setStyle(true, in: app)
         let shown = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: panel)
         XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 5), .completed)
         assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "One Style press shows the selected shape panel")
-        style.tap()
+        setStyle(false, in: app)
         let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: panel)
         XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
         assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "One more Style press hides the selected shape panel")
+    }
+
+    func testPenSelectionAutomaticallyShowsExistingStyleSettings() {
+        let app = openSyntheticDrawing()
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let rectangle = tool(named: "Rectangle", in: control)
+        rectangle.tap()
+        assertSelection(rectangle, control: control)
+        setStyle(false, in: app)
+        let panel = app.webViews.otherElements.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Selected shape actions,")
+        ).firstMatch
+        XCTAssertFalse(panel.isHittable)
+        let pen = tool(named: "Draw", in: control)
+        XCTAssertTrue(pen.isHittable)
+        pen.tap()
+        assertSelection(pen, control: control)
+        let shown = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"), object: panel
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 5), .completed)
+        captureEditorPhase(app, name: "Selecting Draw automatically shows existing pen settings")
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        menu.tap()
+        waitForMenuToggle("toolbar.style", toBe: true, in: app)
+        dismissSettingsMenu(in: app)
+        assertNativeActionGeometry(in: app)
     }
 
     @discardableResult
@@ -518,7 +550,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
     ) -> [String: CGRect] {
         let picker = app.segmentedControls["toolbar.toolPicker"].firstMatch
         var frames: [String: CGRect] = [:]
-        for identifier in ["toolbar.undo", "toolbar.style", "toolbar.share", "toolbar.moreTools"] {
+        for identifier in ["toolbar.undo", "toolbar.extraTools", "toolbar.share", "toolbar.moreTools"] {
             let button = app.buttons[identifier].firstMatch
             XCTAssertTrue(button.exists, identifier, file: file, line: line)
             let frame = button.frame
@@ -543,6 +575,21 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             menu.swipeUp()
         }
         XCTAssertTrue(action.isHittable, "The secondary menu must scroll to its command")
+    }
+
+    private func setStyle(_ shown: Bool, in app: XCUIApplication) {
+        let menu = app.buttons["toolbar.moreTools"].firstMatch
+        setMenuToggle("toolbar.style", to: shown, menu: menu, in: app)
+        dismissSettingsMenu(in: app)
+    }
+
+    private func dismissSettingsMenu(in app: XCUIApplication) {
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.descendants(matching: .any)["toolbar.style"].firstMatch
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
     }
 
     private func captureEditorPhase(_ app: XCUIApplication, name: String) {
