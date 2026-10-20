@@ -13,6 +13,55 @@ import Logging
 actor FileRepository {
     private let logger = Logger(label: "FileRepository")
 
+#if DEBUG && os(iOS) && targetEnvironment(simulator)
+    enum CanvasSaveTestPhase: Sendable, Equatable { case beforeStorage, afterStorage }
+    private var canvasSaveTestControl: (
+        id: NSManagedObjectID, name: String,
+        operation: @Sendable (CanvasSaveTestPhase) async throws -> Void
+    )?
+
+    /// A test may pause or fail only its exact synthetic record. Release continues the real write.
+    func setCanvasSaveTestControl(
+        fileObjectID: NSManagedObjectID,
+        expectedName: String,
+        operation: (@Sendable (CanvasSaveTestPhase) async throws -> Void)?
+    ) async throws {
+        guard ProcessInfo.processInfo.environment["EXCALIDRAWZ_ISOLATED_UI_TESTS"] == "1",
+              ProcessInfo.processInfo.environment["EXCALIDRAWZ_LIBRARY_SAVE_TESTS"] == "1",
+              Bundle.main.bundleIdentifier == "de.lenard.excalidrawz.test.integration.ExcalidrawZ",
+              !ICloudContainerConfiguration.current.isCloudKitEnabled,
+              expectedName.hasPrefix("Library-save-test-"),
+              UUID(uuidString: String(expectedName.dropFirst("Library-save-test-".count))) != nil,
+              canvasSaveTestControl == nil || canvasSaveTestControl?.id == fileObjectID else {
+            throw CocoaError(.validationMissingMandatoryProperty)
+        }
+        let context = PersistenceController.shared.newTaskContext()
+        let matches = try await context.perform {
+            guard let file = try context.existingObject(with: fileObjectID) as? File else { return false }
+            return file.name == expectedName && !file.inTrash
+        }
+        guard matches else { throw CocoaError(.validationMissingMandatoryProperty) }
+        if let operation {
+            canvasSaveTestControl = (fileObjectID, expectedName, operation)
+        } else if canvasSaveTestControl?.id == fileObjectID {
+            canvasSaveTestControl = nil
+        }
+    }
+
+    private func runCanvasSaveTestControl(
+        _ phase: CanvasSaveTestPhase, fileObjectID: NSManagedObjectID
+    ) async throws {
+        guard let control = canvasSaveTestControl, control.id == fileObjectID else { return }
+        let context = PersistenceController.shared.newTaskContext()
+        let matches = try await context.perform {
+            guard let file = try context.existingObject(with: fileObjectID) as? File else { return false }
+            return file.name == control.name && !file.inTrash
+        }
+        guard matches else { throw CocoaError(.validationMissingMandatoryProperty) }
+        try await control.operation(phase)
+    }
+#endif
+
     // MARK: - Create File
 
     /// Create a new file with content and save to iCloud Drive
@@ -190,11 +239,18 @@ actor FileRepository {
             context: context
         )
 
+#if DEBUG && os(iOS) && targetEnvironment(simulator)
+        try await runCanvasSaveTestControl(.beforeStorage, fileObjectID: fileObjectID)
+#endif
         try await saveFileContentToStorage(
             fileObjectID: fileObjectID,
             content: contentData,
             updateMetadataWhenPathUnchanged: updateMetadataWhenPathUnchanged
         )
+
+#if DEBUG && os(iOS) && targetEnvironment(simulator)
+        try await runCanvasSaveTestControl(.afterStorage, fileObjectID: fileObjectID)
+#endif
 
         // Step 2: Write checkpoint per policy.
         switch checkpoint {

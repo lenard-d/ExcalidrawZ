@@ -522,6 +522,11 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
         }
     }
 
+    private enum CanvasPersistenceTarget {
+        case external(FileState, URL)
+        case library(FileState.CapturedCanvasSaveTarget)
+    }
+
     private func applyAdmittedCanvasFileData(
         _ fileData: ExcalidrawCore.ExcalidrawFileData,
         currentFileID: String?,
@@ -563,7 +568,7 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
 
         let fileToApply = updatedFile
         let updateToApply = preparedUpdate
-        let externalTarget = try await MainActor.run { () throws -> (FileState, URL)? in
+        let persistenceTarget = try await MainActor.run { () throws -> CanvasPersistenceTarget? in
             guard capture?.isCurrent != false else { throw CancellationError() }
             guard type == .collaboration || core.parent?.file?.id == currentFileID else {
                 throw CancellationError()
@@ -577,21 +582,33 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
                     case .localFile(let url), .temporaryFile(let url):
                         // Mirror the live scene for export, but do not start a second save task.
                         fileState.applyExternalCanvasSnapshot { core.parent?.file = fileToApply }
-                        return (fileState, url)
+                        return .external(fileState, url)
                     default:
                         break
                 }
             }
-            if let updateToApply {
-                guard persistPreparedLibraryCanvasUpdateIfNeeded(
-                    updateToApply, currentFileID: currentFileID, type: type, core: core
-                ) else { throw CancellationError() }
+            if updateToApply != nil, type == .normal,
+               let fileState = core.parent?.fileState,
+               case .file(let activeFile) = fileState.currentActiveFile {
+                guard activeFile.id?.uuidString == currentFileID,
+                      let target = fileState.prepareLibraryCanvasSaveTarget(activeFile) else {
+                    throw CancellationError()
+                }
+                // Keep the live mirror even if the awaited persistence fails.
+                core.parent?.file = fileToApply
+                return .library(target)
             }
             core.parent?.file = fileToApply
             return nil
         }
-        if let (fileState, url) = externalTarget {
-            try await fileState.persistExternalCanvasUpdate(fileToApply, to: url, capture: capture)
+        switch persistenceTarget {
+            case .external(let fileState, let url):
+                try await fileState.persistExternalCanvasUpdate(fileToApply, to: url, capture: capture)
+            case .library(let target):
+                // applyCanvasFileData already owns capture.performSave. Do not nest it.
+                try await FileState.persistCapturedCanvasUpdate(target, with: fileToApply, capture: capture)
+            case nil:
+                break
         }
     }
 
@@ -679,34 +696,6 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
             }
             return activeFile.name
         }
-    }
-
-    @MainActor
-    private func persistPreparedLibraryCanvasUpdateIfNeeded(
-        _ preparedUpdate: ExcalidrawFile.PreparedCanvasDataUpdate,
-        currentFileID: String?,
-        type: ExcalidrawCanvasView.ExcalidrawType?,
-        core: ExcalidrawCore
-    ) -> Bool {
-        guard type == .normal else {
-            return true
-        }
-        guard let currentFileID,
-              let fileState = core.parent?.fileState,
-              case .file(let activeFile) = fileState.currentActiveFile else {
-            return true
-        }
-        guard activeFile.id?.uuidString == currentFileID else {
-            core.logger.debug(
-                "Skipped persisting prepared library canvas update: active file mismatch expected=\(currentFileID) actual=\(activeFile.id?.uuidString ?? "nil")"
-            )
-            return false
-        }
-
-        var file = ExcalidrawFile()
-        file.id = currentFileID
-        file.apply(preparedUpdate)
-        return fileState.persistPreparedLibraryCanvasUpdate(activeFile, with: file)
     }
 
     private static func elements(

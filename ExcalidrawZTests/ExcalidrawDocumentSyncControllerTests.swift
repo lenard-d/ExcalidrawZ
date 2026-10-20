@@ -1,5 +1,6 @@
-#if os(iOS) && targetEnvironment(simulator)
+#if DEBUG && os(iOS) && targetEnvironment(simulator)
 import Combine
+import CoreData
 import SwiftUI
 import UIKit
 import WebKit
@@ -156,6 +157,162 @@ final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
         let pending = await ExternalFileSaveCoordinator.shared.pendingContent(at: fixture.url, session: owner.saveSession)
         XCTAssertNil(pending)
     }
+
+    @MainActor
+    func testLibraryFlushWaitsForRealRepositoryReturnBeforeAcknowledging() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let controller = fixture.core.documentSyncController
+        let control = LibrarySaveControl(phase: .afterStorage)
+        addTeardownBlock { await control.release() }
+        try await fixture.install(control)
+        try await fixture.setScene(2)
+        try await fixture.recordDirtyScene()
+        let completed = expectation(description: "Flush waits for the held repository")
+        completed.isInverted = true
+        var checking = true
+        let flush = Task {
+            await controller.flushPendingDirtySnapshot(reason: "sceneBackground", force: true)
+            if checking { completed.fulfill() }
+        }
+        fixture.cancelOnClose(flush)
+        try await control.waitUntilPaused()
+        await fulfillment(of: [completed], timeout: 0.1)
+        checking = false
+        XCTAssertTrue(controller.hasPendingDirtySnapshot)
+        XCTAssertTrue(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
+        let written = try await fixture.libraryElementIDs()
+        XCTAssertEqual(written, ["revision-2"], "This gate follows the real local storage return")
+        await control.release()
+        try await boundedSaveTestValue(flush)
+        XCTAssertFalse(controller.hasPendingDirtySnapshot)
+        let persisted = try await fixture.libraryElementIDs()
+        XCTAssertEqual(persisted, ["revision-2"])
+    }
+
+    @MainActor
+    func testLibraryFailureKeepsMirrorDirtyIntentAndNavigationVetoUntilRetry() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let core = try XCTUnwrap(fixture.core)
+        let controller = core.documentSyncController
+        let owner = try XCTUnwrap(controller.captureCanvasMutationSession())
+        var errors: [NSError] = []
+        core.publishError = { errors.append($0 as NSError) }
+        try await fixture.installFailure()
+        try await fixture.setScene(3)
+        try await fixture.recordDirtyScene()
+        await controller.flushPendingDirtySnapshot(reason: "sceneBackground", force: true)
+        XCTAssertTrue(controller.hasPendingDirtySnapshot)
+        XCTAssertTrue(fixture.state.canvasSaveCoordinator.hasPendingFullContent)
+        let oldDisk = try await fixture.libraryElementIDs()
+        XCTAssertEqual(oldDisk, [])
+        XCTAssertTrue(errors.contains { $0.domain == NSCocoaErrorDomain && $0.code == CocoaError.fileWriteNoPermission.rawValue })
+        let mirror = try fixture.scene(from: XCTUnwrap(fixture.model.file?.content))
+        XCTAssertEqual((mirror["elements"] as? [[String: Any]])?.first?["id"] as? String, "revision-3")
+        let accepted = await fixture.state.requestActiveFileChange(nil)
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(fixture.state.currentActiveFile?.id, owner.fileID)
+        try await fixture.clearControl()
+        await controller.flushPendingDirtySnapshot(reason: "retry", force: true)
+        XCTAssertFalse(controller.hasPendingDirtySnapshot)
+        let retried = try await fixture.libraryElementIDs()
+        XCTAssertEqual(retried, ["revision-3"])
+    }
+
+    @MainActor
+    func testLibraryOlderRepositoryCallCannotOverwriteNewerCompletedScene() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let controller = fixture.core.documentSyncController
+        let control = LibrarySaveControl(phase: .beforeStorage)
+        addTeardownBlock { await control.release() }
+        try await fixture.install(control)
+        try await fixture.setScene(1)
+        let old = Task { try await fixture.sendFullScene() }
+        fixture.cancelOnClose(old)
+        try await control.waitUntilPaused()
+        try await fixture.setScene(2)
+        let latest = Task { try await fixture.sendFullScene() }
+        fixture.cancelOnClose(latest)
+        try await boundedSaveTestValue(latest)
+        await controller.flushPendingDirtySnapshot(reason: "confirmLatest", force: true)
+        XCTAssertFalse(controller.hasPendingDirtySnapshot)
+        let newestDisk = try await fixture.libraryElementIDs()
+        XCTAssertEqual(newestDisk, ["revision-2"])
+        await control.release()
+        try await boundedSaveTestValue(old)
+        let finalDisk = try await fixture.libraryElementIDs()
+        XCTAssertEqual(finalDisk, ["revision-2"], "A late old call must not replace newer durable content")
+        XCTAssertFalse(controller.hasPendingDirtySnapshot)
+    }
+
+    @MainActor
+    func testLibrarySwitchKeepsOriginalOwnerUntilHeldSaveFinishes() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let owner = try XCTUnwrap(fixture.state.currentActiveFile?.id)
+        let control = LibrarySaveControl(phase: .beforeStorage)
+        addTeardownBlock { await control.release() }
+        try await fixture.install(control)
+        try await fixture.setScene(4)
+        try await fixture.recordDirtyScene()
+        let transition = Task { await fixture.state.requestActiveFileChange(.temporaryFile(fixture.url)) }
+        fixture.cancelOnClose(transition)
+        try await control.waitUntilPaused()
+        XCTAssertEqual(fixture.state.currentActiveFile?.id, owner)
+        XCTAssertTrue(fixture.core.documentSyncController.hasPendingDirtySnapshot)
+        let oldDisk = try await fixture.libraryElementIDs()
+        XCTAssertEqual(oldDisk, [])
+        XCTAssertEqual(try Data(contentsOf: fixture.url), fixture.original)
+        await control.release()
+        let accepted = try await boundedSaveTestValue(transition)
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(fixture.state.currentActiveFile?.id, fixture.url.absoluteString)
+        let saved = try await fixture.libraryElementIDs()
+        XCTAssertEqual(saved, ["revision-4"])
+        XCTAssertEqual(try Data(contentsOf: fixture.url), fixture.original, "Outgoing content must stay on its library target")
+    }
+
+    @MainActor
+    func testLibraryNewerCaptureDuringHeldFlushRemainsPendingUntilItsOwnWrite() async throws {
+        let fixture = try await CanvasControllerFixture.open(library: true)
+        addTeardownBlock { await fixture.close() }
+        let controller = fixture.core.documentSyncController
+        let control = LibrarySaveControl(phase: .afterStorage)
+        addTeardownBlock { await control.release() }
+        try await fixture.install(control)
+        try await fixture.setScene(5)
+        try await fixture.recordDirtyScene()
+        let old = Task { await controller.flushPendingDirtySnapshot(reason: "sceneBackground", force: true) }
+        fixture.cancelOnClose(old)
+        try await control.waitUntilPaused()
+        try await fixture.setScene(6)
+        try await fixture.recordDirtyScene()
+        await control.release()
+        try await boundedSaveTestValue(old)
+        XCTAssertTrue(controller.hasPendingDirtySnapshot, "The older receipt cannot acknowledge a newer capture")
+        try await fixture.clearControl()
+        await controller.flushPendingDirtySnapshot(reason: "retryLatest", force: true)
+        let persisted = try await fixture.libraryElementIDs()
+        XCTAssertEqual(persisted, ["revision-6"])
+        XCTAssertFalse(controller.hasPendingDirtySnapshot)
+    }
+}
+
+/// The existing bounded gate holds only the first selected real repository operation.
+private actor LibrarySaveControl {
+    let gate = SaveTestGate()
+    let phase: FileRepository.CanvasSaveTestPhase
+    private var entered = false
+    init(phase: FileRepository.CanvasSaveTestPhase) { self.phase = phase }
+    func visit(_ phase: FileRepository.CanvasSaveTestPhase) async throws {
+        guard phase == self.phase, !entered else { return }
+        entered = true
+        try await gate.pause()
+    }
+    func waitUntilPaused() async throws { try await gate.waitUntilPaused() }
+    func release() async { await gate.release() }
 }
 
 private struct ObservedLoad: Equatable {
@@ -208,6 +365,9 @@ private final class CanvasControllerFixture {
 
     // Keep a vetoed fixture and its live owner available until the test process exits.
     private static var retainedFixtures: [CanvasControllerFixture] = []
+    private(set) var libraryFile: File?
+    private var libraryGroup: Group?
+    let libraryName = "Library-save-test-" + UUID().uuidString
     let state = FileState()
     let model = CanvasControllerModel()
     let toolState = ToolState()
@@ -228,19 +388,39 @@ private final class CanvasControllerFixture {
         try original.write(to: url)
     }
 
-    static func open() async throws -> CanvasControllerFixture {
+    static func open(library: Bool = false) async throws -> CanvasControllerFixture {
         let fixture = try CanvasControllerFixture()
         var stage = "prepare open-in-place access"
         do {
-            // Match the actual open-from-URL entry point, including its UIDocument writer.
-            try await fixture.state.prepareOpenInPlaceAccess(to: fixture.url)
-            stage = "accept the synthetic document as active"
-            let accepted = await fixture.state.requestActiveFileChange(.temporaryFile(fixture.url))
-            guard accepted else { throw SaveTestWaitError.timedOut }
-            stage = "capture the real document writer"
-            let target = try XCTUnwrap(fixture.state.capturedCanvasSaveTarget(for: .temporaryFile(fixture.url)))
-            XCTAssertTrue(target.isOpenInPlace)
-            _ = try XCTUnwrap(target.externalWriter)
+            if library {
+                guard ProcessInfo.processInfo.environment["EXCALIDRAWZ_ISOLATED_UI_TESTS"] == "1",
+                      ProcessInfo.processInfo.environment["EXCALIDRAWZ_LIBRARY_SAVE_TESTS"] == "1",
+                      Bundle.main.bundleIdentifier == "de.lenard.excalidrawz.test.integration.ExcalidrawZ",
+                      !ICloudContainerConfiguration.current.isCloudKitEnabled else {
+                    throw CocoaError(.validationMissingMandatoryProperty)
+                }
+                stage = "create the unique synthetic library record"
+                let context = PersistenceController.shared.container.viewContext
+                let group = Group(name: fixture.libraryName, context: context)
+                try context.save()
+                fixture.libraryGroup = group
+                let id = try await PersistenceController.shared.fileRepository.createFile(
+                    name: fixture.libraryName, content: fixture.original, groupObjectID: group.objectID
+                )
+                let file = try XCTUnwrap(try context.existingObject(with: id) as? File)
+                fixture.libraryFile = file
+                guard await fixture.state.requestActiveFileChange(.file(file)) else { throw SaveTestWaitError.timedOut }
+            } else {
+                // Match the actual open-from-URL entry point, including its UIDocument writer.
+                try await fixture.state.prepareOpenInPlaceAccess(to: fixture.url)
+                stage = "accept the synthetic document as active"
+                let accepted = await fixture.state.requestActiveFileChange(.temporaryFile(fixture.url))
+                guard accepted else { throw SaveTestWaitError.timedOut }
+                stage = "capture the real document writer"
+                let target = try XCTUnwrap(fixture.state.capturedCanvasSaveTarget(for: .temporaryFile(fixture.url)))
+                XCTAssertTrue(target.isOpenInPlace)
+                _ = try XCTUnwrap(target.externalWriter)
+            }
             let view = ControllerTestCanvas(model: fixture.model)
                 .environmentObject(fixture.state).environmentObject(fixture.toolState)
                 .environmentObject(fixture.exportState).environmentObject(fixture.preferences)
@@ -265,15 +445,19 @@ private final class CanvasControllerFixture {
             fixture.core.isNavigating = false
             fixture.core.isDocumentLoaded = true
             stage = "decode the synthetic document"
-            fixture.model.file = try ExcalidrawFile(data: fixture.original, id: fixture.url.absoluteString)
+            fixture.model.file = try ExcalidrawFile(data: fixture.original, id: try XCTUnwrap(fixture.state.currentActiveFile?.id))
             stage = "confirm the loaded canvas session and temporary row"
             try await fixture.waitUntil {
                 fixture.core.documentSyncController.captureCanvasMutationSession() != nil
-                    && fixture.state.temporaryFiles.contains(fixture.url)
+                    && (library || fixture.state.temporaryFiles.contains(fixture.url))
             }
-            stage = "record the external read baseline"
-            let session = try await fixture.state.recordExternalFileRead(fixture.original, at: fixture.url)
-            fixture.state.installExternalSaveSession(session)
+            if !library {
+                stage = "record the external read baseline"
+                let session = try await fixture.state.recordExternalFileRead(fixture.original, at: fixture.url)
+                fixture.state.installExternalSaveSession(session)
+            }
+            stage = "wait for the update gate to accept canvas saves"
+            try await fixture.waitUntil { !fixture.state.shouldIgnoreUpdate && !fixture.core.isLoading }
             return fixture
         } catch {
             let failure = SetupFailure(stage: stage, underlying: error)
@@ -293,6 +477,11 @@ private final class CanvasControllerFixture {
         // Release held bridge work before cancelling/resetting its native owner.
         if core != nil {
             try? await evaluate("window.releaseLoad?.(); window.releaseImage?.();")
+        }
+if let libraryFile {
+            try? await PersistenceController.shared.fileRepository.setCanvasSaveTestControl(
+                fileObjectID: libraryFile.objectID, expectedName: libraryName, operation: nil
+            )
         }
         for cleanup in taskCleanup { await cleanup() }
         let session = state.externalSaveSessionID
@@ -346,10 +535,83 @@ private final class CanvasControllerFixture {
                 XCTFail("Synthetic failed save retained for diagnosis at \(directory.path)")
                 return
             }
+if let libraryFile {
+                try await PersistenceController.shared.fileRepository.delete(
+                    fileObjectID: libraryFile.objectID, forcePermanently: true
+                )
+                if let libraryGroup {
+                    let context = PersistenceController.shared.container.viewContext
+                    context.delete(libraryGroup)
+                    try context.save()
+                }
+            }
             try FileManager.default.removeItem(at: directory)
         } catch {
             XCTFail("Synthetic document cleanup did not finish: \(error)")
         }
+    }
+
+    func install(_ control: LibrarySaveControl) async throws {
+        let file = try XCTUnwrap(libraryFile)
+        XCTAssertEqual(state.currentActiveFile?.id, file.id?.uuidString)
+        try await PersistenceController.shared.fileRepository.setCanvasSaveTestControl(
+            fileObjectID: file.objectID, expectedName: libraryName
+        ) { phase in try await control.visit(phase) }
+    }
+
+    func installFailure() async throws {
+        let file = try XCTUnwrap(libraryFile)
+        try await PersistenceController.shared.fileRepository.setCanvasSaveTestControl(
+            fileObjectID: file.objectID, expectedName: libraryName
+        ) { phase in
+            if phase == .beforeStorage { throw CocoaError(.fileWriteNoPermission) }
+        }
+    }
+
+    func clearControl() async throws {
+        let file = try XCTUnwrap(libraryFile)
+        try await PersistenceController.shared.fileRepository.setCanvasSaveTestControl(
+            fileObjectID: file.objectID, expectedName: libraryName, operation: nil
+        )
+    }
+
+    func setScene(_ revision: Int) async throws {
+        try await evaluate("""
+        window.scene.elements = [{type:"rectangle", id:"revision-\(revision)", x:\(revision), y:2,
+          width:3, height:4, strokeColor:"#000000", backgroundColor:"transparent", fillStyle:"solid",
+          strokeWidth:1, strokeStyle:"solid", roughness:0, opacity:100, angle:0,
+          seed:1, version:\(revision), versionNonce:1, isDeleted:false, groupIds:[]}];
+        window.sceneRevision = \(revision);
+        """)
+    }
+
+    func sendFullScene() async throws {
+        let json = try JSONSerialization.data(withJSONObject: try await scene())
+        let message = ExcalidrawCore.StateChangedMessageData(
+            state: nil, fileData: .init(documentData: json, elements: nil, files: [:]), metadata: nil
+        )
+        let admission = try XCTUnwrap(core.documentSyncController.admitStateChanged(message))
+        await core.documentSyncController.save(message, admission: admission)
+    }
+
+    func recordDirtyScene() async throws {
+        let metadata = try JSONDecoder().decode(ExcalidrawCore.StateChangedMetadata.self,
+            from: Data("{\"revision\":\(try await integer("window.sceneRevision")),\"contentDirty\":true}".utf8))
+        let message = ExcalidrawCore.StateChangedMessageData(state: nil, fileData: nil, metadata: metadata)
+        let admission = try XCTUnwrap(core.documentSyncController.admitStateChanged(message))
+        await core.documentSyncController.save(message, admission: admission)
+    }
+
+    func libraryElementIDs() async throws -> [String] {
+        let id = try XCTUnwrap(libraryFile?.objectID)
+        let context = PersistenceController.shared.newTaskContext()
+        let path = try await context.perform {
+            let file = try XCTUnwrap(try context.existingObject(with: id) as? File)
+            return try XCTUnwrap(file.filePath)
+        }
+        let data = try await LocalStorageManager().loadContent(relativePath: path)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try XCTUnwrap(object["elements"] as? [[String: Any]]).compactMap { $0["id"] as? String }
     }
 
     func evaluate(_ script: String) async throws {
@@ -405,7 +667,7 @@ private final class CanvasControllerFixture {
     private static let html = #"""
     <!doctype html><script>
     window.scene = {elements: [], appState: {gridSize: 10, viewBackgroundColor: "#ffffff"}, files: {}};
-    window.loadCalls = 0; window.snapshotReads = 0;
+    window.loadCalls = 0; window.snapshotReads = 0; window.sceneRevision = 1;
     const helper = {
       _api: {getAppState: () => window.scene.appState},
       async loadFileBuffer(buffer, id, requestId) {
@@ -421,7 +683,7 @@ private final class CanvasControllerFixture {
         return {fileId: id, requestId, elementCount: window.scene.elements.length, durationMs: 0};
       },
       requestCurrentFileSaveStream: () => ({supported: false}),
-      getCurrentFileSnapshot() { window.snapshotReads++; return {...window.scene, revision: 1}; },
+      getCurrentFileSnapshot() { window.snapshotReads++; return {...window.scene, revision: window.sceneRevision}; },
       async loadImageBuffer(buffer, type) {
         window.imagePaused = true;
         await new Promise(resolve => window.releaseImage = resolve);
