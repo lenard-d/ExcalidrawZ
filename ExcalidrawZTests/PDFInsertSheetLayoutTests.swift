@@ -286,7 +286,9 @@ final class PDFInsertSheetLayoutTests: XCTestCase {
         }
 
         func element(_ identifier: String) async throws -> NSObject {
-            try await waitUntil { self.findElement(identifier) != nil }
+            try await waitUntil(description: "accessibility element '\(identifier)'") {
+                self.findElement(identifier) != nil
+            }
             return try XCTUnwrap(findElement(identifier))
         }
 
@@ -306,7 +308,7 @@ final class PDFInsertSheetLayoutTests: XCTestCase {
 
         func scrollableContent(containing identifier: String? = nil) async throws -> UIScrollView {
             var result: UIScrollView?
-            try await waitUntil {
+            try await waitUntil(description: "scrollable content containing \(identifier ?? "any element")") {
                 result = self.accessibilityObjects().compactMap { $0 as? UIScrollView }.first {
                     guard $0.contentSize.height > $0.bounds.height, $0.bounds.height > 0 else { return false }
                     guard let identifier else { return true }
@@ -319,13 +321,76 @@ final class PDFInsertSheetLayoutTests: XCTestCase {
             return try XCTUnwrap(result)
         }
 
-        func waitUntil(_ condition: () -> Bool) async throws {
+        func waitUntil(description: String = "the expected rendered sheet state", _ condition: () -> Bool) async throws {
             let deadline = Date().addingTimeInterval(3)
             while !condition(), Date() < deadline {
                 layout()
                 try await Task.sleep(for: .milliseconds(20))
             }
-            XCTAssertTrue(condition(), "Rendered sheet did not reach the expected state")
+            guard condition() else {
+                attachFailureDiagnostics(description: description)
+                throw FixtureTimeout(expectation: description)
+            }
+        }
+
+        private struct FixtureTimeout: LocalizedError {
+            let expectation: String
+
+            var errorDescription: String? {
+                "PDF fixture timed out after 3 seconds waiting for \(expectation). See the fixture screenshot and hierarchy attachments."
+            }
+        }
+
+        private func attachFailureDiagnostics(description: String) {
+            layout()
+            var lines = [
+                "Waiting for: \(description)",
+                "Fixture window: \(windowDescription(window))",
+                "Hosted view: frame=\(controller.view.frame), bounds=\(controller.view.bounds), attachedToFixture=\(controller.view.window === window)",
+            ]
+            for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+                lines.append("Scene: activation=\(scene.activationState.rawValue), bounds=\(scene.coordinateSpace.bounds), fixtureScene=\(scene === window.windowScene)")
+                lines.append(contentsOf: scene.windows.map(windowDescription))
+            }
+            if let root = window.rootViewController {
+                lines.append("Fixture controller hierarchy:")
+                appendControllerDescription(root, to: &lines)
+            }
+            lines.append("Identified accessibility nodes:")
+            for object in accessibilityObjects() {
+                if let identifier = (object as? UIAccessibilityIdentification)?.accessibilityIdentifier {
+                    lines.append("\(String(reflecting: type(of: object))): id=\(identifier), frame=\(object.accessibilityFrame)")
+                }
+            }
+            var didDraw = false
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                didDraw = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            lines.append("Window hierarchy rendered: \(didDraw)")
+            XCTContext.runActivity(named: "PDF fixture timeout: \(description)") { activity in
+                let hierarchy = XCTAttachment(string: lines.joined(separator: "\n"))
+                hierarchy.name = "PDF fixture scene and hierarchy"
+                hierarchy.lifetime = .keepAlways
+                activity.add(hierarchy)
+                let screenshot = XCTAttachment(image: image)
+                screenshot.name = "PDF fixture rendered window"
+                screenshot.lifetime = .keepAlways
+                activity.add(screenshot)
+            }
+        }
+
+        private func windowDescription(_ window: UIWindow) -> String {
+            "\(String(reflecting: type(of: window))): fixture=\(window === self.window), key=\(window.isKeyWindow), hidden=\(window.isHidden), alpha=\(window.alpha), level=\(window.windowLevel.rawValue), frame=\(window.frame), bounds=\(window.bounds)"
+        }
+
+        private func appendControllerDescription(_ controller: UIViewController, to lines: inout [String], depth: Int = 0) {
+            lines.append("\(String(repeating: "  ", count: depth))\(String(reflecting: type(of: controller))): loaded=\(controller.isViewLoaded), attachedToFixture=\(controller.viewIfLoaded?.window === window)")
+            for child in controller.children {
+                appendControllerDescription(child, to: &lines, depth: depth + 1)
+            }
+            if let presented = controller.presentedViewController {
+                appendControllerDescription(presented, to: &lines, depth: depth + 1)
+            }
         }
 
         private func accessibilityObjects(root: NSObject? = nil) -> [NSObject] {
@@ -337,6 +402,10 @@ final class PDFInsertSheetLayoutTests: XCTestCase {
                 result.append(object)
                 if let view = object as? UIView {
                     pending.append(contentsOf: view.subviews)
+                }
+                pending.append(contentsOf: (object.accessibilityElements ?? []).compactMap { $0 as? NSObject })
+                if #available(iOS 17.0, *) {
+                    pending.append(contentsOf: (object.automationElements ?? []).compactMap { $0 as? NSObject })
                 }
                 let count = object.accessibilityElementCount()
                 if count > 0 && count < 10_000 {
