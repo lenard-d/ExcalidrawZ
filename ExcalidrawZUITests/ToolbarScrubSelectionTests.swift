@@ -261,26 +261,27 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         assertNativeActionGeometry(in: app, matching: initialFrames)
         undo.tap()
         captureEditorPhase(app, name: "After Undo, inspect rectangle removal")
-        assertNativeActionGeometry(in: app, matching: initialFrames)
         undo.tap()
         let redo = app.buttons["toolbar.redoAction"].firstMatch
+        let undoAction = app.buttons["toolbar.undoAction"].firstMatch
         XCTAssertTrue(redo.waitForExistence(timeout: 5), "A tap must open the menu when only Redo is available")
         XCTAssertTrue(redo.isEnabled)
-        XCTAssertFalse(app.buttons["toolbar.undoAction"].firstMatch.isEnabled)
+        XCTAssertTrue(undoAction.exists)
+        XCTAssertFalse(undoAction.isEnabled)
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "Redo-only menu opened with one tap")
         redo.tap()
         let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: redo)
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed)
-        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "After Redo, inspect rectangle restoration")
         undo.press(forDuration: 1)
-        let undoAction = app.buttons["toolbar.undoAction"].firstMatch
         XCTAssertTrue(undoAction.waitForExistence(timeout: 5))
         let historyRestored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             undoAction.isEnabled && redo.exists && !redo.isEnabled
         }, object: undoAction)
         XCTAssertEqual(XCTWaiter.wait(for: [historyRestored], timeout: 5), .completed,
                        "Redo must restore Undo availability and exhaust the redo history")
+        assertNativeActionGeometry(in: app, matching: initialFrames)
         captureEditorPhase(app, name: "History state after Redo")
     }
 
@@ -356,6 +357,8 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             let frame = button.frame
             XCTAssertGreaterThanOrEqual(frame.width, 44, identifier, file: file, line: line)
             XCTAssertGreaterThanOrEqual(frame.height, 44, identifier, file: file, line: line)
+            XCTAssertEqual(frame.width, 44, accuracy: 0.5, identifier, file: file, line: line)
+            XCTAssertEqual(frame.height, 44, accuracy: 0.5, identifier, file: file, line: line)
             XCTAssertEqual(frame.midY, picker.frame.midY, accuracy: 12, identifier, file: file, line: line)
             if let initial = initialFrames?[identifier] {
                 XCTAssertEqual(frame.width, initial.width, accuracy: 0.5, identifier, file: file, line: line)
