@@ -113,7 +113,8 @@ struct ExcalidrawToolbar: View {
                 }
 #if os(iOS)
                 .apply { picker in
-                    if UIDevice.current.userInterfaceIdiom == .pad, sizeClass != .dense {
+                    if UIDevice.current.userInterfaceIdiom == .pad,
+                       usesExternalSecondaryMenu || sizeClass != .dense {
                         picker
                     } else {
                         picker.excalidrawToolbarSurface(.capsule)
