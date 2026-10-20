@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 
-/// Previews the contacted segment and commits the tool only on a valid release.
+/// Previews the last contacted tool and commits it on release, including outside the row.
 struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
     let items: [ExcalidrawToolbarToolPresentation.Item]
     @Binding var selection: ExcalidrawTool?
@@ -38,6 +38,7 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
         private var renderedScale: CGFloat?
         private struct Contact {
             let initialSelection: ExcalidrawTool?
+            var lastIndex: Int
             var invalidated = false
         }
         private struct PendingRender {
@@ -62,11 +63,6 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
                 }
             }
             control.addTarget(self, action: #selector(commitSelection(_:)), for: .valueChanged)
-            #if DEBUG && targetEnvironment(simulator)
-            if ProcessInfo.processInfo.arguments.contains("-ToolbarStockTrackingProbe") {
-                return control
-            }
-            #endif
             // Keep tap, drag preview, and release in one input path.
             let scrub = UILongPressGestureRecognizer(target: self, action: #selector(handleScrub(_:)))
             scrub.minimumPressDuration = 0
@@ -138,19 +134,21 @@ struct ExcalidrawToolbarUIKitPicker: UIViewRepresentable {
             switch gesture.state {
             case .began:
                 guard contact == nil, let index else { return }
-                contact = Contact(initialSelection: selection.wrappedValue)
+                contact = Contact(initialSelection: selection.wrappedValue, lastIndex: index)
                 control.selectedSegmentIndex = index
             case .changed:
                 guard let contact, !contact.invalidated else { return }
                 if let index {
+                    self.contact?.lastIndex = index
                     control.selectedSegmentIndex = index
-                } else {
-                    restoreSelection(control)
                 }
             case .ended:
                 if let contact, !contact.invalidated,
-                   contact.initialSelection == selection.wrappedValue, let index {
-                    selection.wrappedValue = displayedItems[index].tool
+                   contact.initialSelection == selection.wrappedValue, control.isEnabled {
+                    let lastIndex = index ?? contact.lastIndex
+                    if control.isEnabledForSegment(at: lastIndex) {
+                        selection.wrappedValue = displayedItems[lastIndex].tool
+                    }
                 }
                 finishContact(control)
             case .cancelled, .failed:
