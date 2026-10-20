@@ -1441,7 +1441,8 @@ final class FileState: ObservableObject {
                 try await PersistenceController.shared.fileRepository.updateElements(
                     fileObjectID: fileObjectID,
                     fileData: content,
-                    checkpoint: checkpointPolicy
+                    checkpoint: checkpointPolicy,
+                    capture: capture
                 )
                 logger.debug("Background captured file update saved: \(fileName)")
 
@@ -1553,7 +1554,8 @@ final class FileState: ObservableObject {
                         fileObjectID: fileObjectID,
                         fileData: content,
                         checkpoint: .suppress,
-                        updateMetadataWhenPathUnchanged: false
+                        updateMetadataWhenPathUnchanged: false,
+                        capture: capture
                     )
                     logger.debug("Background appState-only file update saved: \(fileName)")
 
@@ -1634,7 +1636,8 @@ final class FileState: ObservableObject {
                     fileObjectID: file.objectID,
                     fileData: content,
                     checkpoint: .suppress,
-                    updateMetadataWhenPathUnchanged: false
+                    updateMetadataWhenPathUnchanged: false,
+                    capture: capture
                 )
 
             case .localFile(let url), .temporaryFile(let url):

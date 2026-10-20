@@ -438,6 +438,8 @@ final class ExcalidrawDocumentSyncController: @unchecked Sendable {
                 markProgrammaticCommit: false,
                 capture: capture
             )
+        } catch is CancellationError where capture?.isCurrent == false || Task.isCancelled {
+            return
         } catch {
             onError(error)
         }
