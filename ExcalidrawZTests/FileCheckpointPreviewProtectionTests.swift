@@ -108,6 +108,84 @@ final class FileCheckpointPreviewProtectionTests: XCTestCase {
 #if targetEnvironment(simulator)
 @MainActor
 final class FileCheckpointPreviewRelockTests: XCTestCase {
+    func testFailedOwnerReadPreservesProtectionAndRelockRemovesAllWarmVersions() async throws {
+        try await withFixture { fixture in
+            let observer = fixture.state.previewState(for: .file(fixture.file))
+            var versions: [String] = []
+            for revision in [1.0, 2.0] {
+                fixture.checkpoint.updatedAt = Date(timeIntervalSinceReferenceDate: revision)
+                versions.append(await fixture.warmCurrentPreview())
+            }
+
+            try await fixture.makeOwnerUnreadable()
+            await fixture.state.refresh(file: .file(fixture.file))
+            XCTAssertEqual(observer.value, .temporarilyUnlocked)
+            await fixture.relock()
+            XCTAssertEqual(observer.value, .locked)
+
+            for id in versions {
+                for scheme in [ColorScheme.light, .dark] {
+                    XCTAssertNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: scheme))
+                }
+            }
+
+            try fixture.restoreOwnerContent()
+            try await fixture.unlock()
+            XCTAssertEqual(observer.value, .temporarilyUnlocked)
+            _ = await fixture.warmCurrentPreview()
+        }
+    }
+
+    func testFailedOwnerReadCannotPublishExportFromBeforeRelockAfterRecovery() async throws {
+        let gate = ExportGate()
+        try await withFixture(exportPNG: gate.export) { fixture in
+            defer { gate.release() }
+            let id = fixture.trackCurrentPreview()
+            fixture.coordinator.request(checkpoint: fixture.checkpoint, colorScheme: .dark)
+            await fulfillment(of: [gate.started], timeout: 5)
+            XCTAssertEqual(gate.callCount, 1)
+
+            try await fixture.makeOwnerUnreadable()
+            await fixture.state.refresh(file: .file(fixture.file))
+            await fixture.relock()
+            try fixture.restoreOwnerContent()
+            try await fixture.unlock()
+            gate.release()
+            await fixture.coordinator.waitForPendingPreviewWork()
+
+            XCTAssertNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .light))
+            XCTAssertNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: .dark))
+            _ = await fixture.warmCurrentPreview()
+        }
+    }
+
+    func testFailedOwnerReadWithoutKnownProtectionRemainsUnresolvedUntilSuccessfulRead() async throws {
+        try await withFixture { fixture in
+            // The first real read fails while another store already has an
+            // unlock session. It must not infer access from that session.
+            let state = LockedContentStateStore()
+            let observer = state.previewState(for: .file(fixture.file))
+            try await fixture.makeOwnerUnreadable()
+            await state.refresh(file: .file(fixture.file))
+            XCTAssertNil(observer.value)
+            await state.refresh(fileObjectID: fixture.file.objectID, fileID: fixture.file.id!.uuidString)
+            XCTAssertNil(observer.value)
+
+            try fixture.restoreOwnerContent()
+            fixture.file.content = Data(#"{"type":"excalidraw","elements":[],"appState":{},"files":{}}"#.utf8)
+            try fixture.file.managedObjectContext!.save()
+            await state.refresh(file: .file(fixture.file))
+            XCTAssertEqual(observer.value, .plaintext)
+            let revision = state.filePreviewLockStateRevision
+
+            try await fixture.makeOwnerUnreadable()
+            await state.refresh(fileObjectID: fixture.file.objectID, fileID: fixture.file.id!.uuidString)
+            XCTAssertNil(observer.value)
+            XCTAssertGreaterThan(state.filePreviewLockStateRevision, revision)
+            state.resetAll()
+        }
+    }
+
     func testRelockRemovesWarmLibraryPreviewVersionsInBothAppearances() async throws {
         try await withFixture { fixture in
             var versions: [String] = []
@@ -227,6 +305,7 @@ final class FileCheckpointPreviewRelockTests: XCTestCase {
         let coordinator: FileCoverCacheCoordinator
         private let context: NSManagedObjectContext
         private let key: RecoveryKey
+        private let encryptedOwnerContent: Data
         private var previewIDs: Set<String> = []
 
         init(exportPNG: @escaping @MainActor (ExcalidrawFile, ColorScheme) async throws -> Data) async throws {
@@ -242,6 +321,7 @@ final class FileCheckpointPreviewRelockTests: XCTestCase {
             let checkpointContent = try EncryptedContentService.encryptAndVerifyRecovery(
                 content, contentType: "fileCheckpoint", contentID: checkpointID.uuidString, recoveryKey: key
             )
+            encryptedOwnerContent = fileContent
             file = File(context: context)
             file.id = fileID
             file.name = "Synthetic history privacy test"
@@ -286,6 +366,35 @@ final class FileCheckpointPreviewRelockTests: XCTestCase {
             let id = FileCoverCacheCoordinator.checkpointPreviewID(for: checkpoint)
             previewIDs.insert(id)
             return id
+        }
+
+        func warmCurrentPreview() async -> String {
+            let id = trackCurrentPreview()
+            for scheme in [ColorScheme.light, .dark] {
+                coordinator.request(checkpoint: checkpoint, colorScheme: scheme)
+                await coordinator.waitForPendingPreviewWork()
+                XCTAssertNotNil(FileItemPreviewCache.shared.getPreviewCache(forID: id, colorScheme: scheme))
+            }
+            return id
+        }
+
+        func makeOwnerUnreadable() async throws {
+            file.content = nil
+            file.filePath = "history-privacy-missing-\(UUID().uuidString).excalidraw"
+            try context.save()
+            do {
+                _ = try await PersistenceController.shared.fileRepository
+                    .fileContentLockState(fileObjectID: file.objectID)
+                XCTFail("The real owner protection lookup must throw before testing failure handling.")
+            } catch {
+                // The persisted owner still exists. Only its content read fails.
+            }
+        }
+
+        func restoreOwnerContent() throws {
+            file.content = encryptedOwnerContent
+            file.filePath = nil
+            try context.save()
         }
 
         func cleanUp() async throws {
