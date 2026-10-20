@@ -61,7 +61,7 @@ final class WelcomeInterfaceTests: XCTestCase {
             primaryAction.tap()
             assertConsentIsRequired(in: app)
             // The normal-size test covers Cancel. Use native sheet dismissal here.
-            app.swipeDown()
+            dismissConsentSheet(in: app)
             let dismissed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "exists == false"),
                 object: app.buttons["Enable AI"]
@@ -105,13 +105,17 @@ final class WelcomeInterfaceTests: XCTestCase {
     ) -> XCUIApplication {
         let app = openDrawing(orientation: orientation, largeText: largeText)
         let welcome = app.scrollViews["aiChatWelcomeScrollView"]
-        if !welcome.waitForExistence(timeout: 2) {
-            let chat = app.buttons["AI Chat"].firstMatch
-            let ready = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "isHittable == true"),
-                object: chat
-            )
-            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+        let chat = app.buttons["AI Chat"].firstMatch
+        let loading = app.staticTexts["Loading…"]
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                !loading.exists && (welcome.exists || chat.isHittable)
+            },
+            object: app
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed,
+                       "Wait for the drawing's loading cover to close before opening chat.")
+        if !welcome.exists {
             chat.tap()
         }
         XCTAssertTrue(welcome.waitForExistence(timeout: 5))
@@ -181,6 +185,36 @@ final class WelcomeInterfaceTests: XCTestCase {
         let enable = app.buttons["Enable AI"]
         XCTAssertTrue(enable.waitForExistence(timeout: 5))
         XCTAssertFalse(enable.isEnabled)
+    }
+
+    private func dismissConsentSheet(in app: XCUIApplication) {
+        let window = app.windows.firstMatch
+        let windowFrame = window.frame
+        // Use the visible native sheet boundary, not its overflowing consent content.
+        let sheet = app.otherElements.containing(.button, identifier: "Enable AI")
+            .allElementsBoundByIndex
+            .filter {
+                let frame = $0.frame
+                return !frame.isEmpty && windowFrame.contains(frame)
+                    && frame.width < windowFrame.width
+                    && frame.height < windowFrame.height
+            }
+            .min { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+        guard let sheet else {
+            XCTFail("The consent sheet must have a visible native container for dismissal.")
+            return
+        }
+        let frame = sheet.frame
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(
+            dx: frame.midX - windowFrame.minX,
+            dy: frame.minY - windowFrame.minY + 8
+        ))
+        let end = origin.withOffset(CGVector(
+            dx: frame.midX - windowFrame.minX,
+            dy: windowFrame.height - 12
+        ))
+        start.press(forDuration: 0.1, thenDragTo: end)
     }
 
     private func scrollToHittable(
