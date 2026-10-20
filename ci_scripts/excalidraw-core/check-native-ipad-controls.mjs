@@ -107,7 +107,7 @@ async function styleHelper(page) {
   return { helper, toggle: interaction.namespace.toggleActionsMenu };
 }
 
-test("Style records hidden state without a panel and applies it when the panel is later present", async () => {
+test("Style stores requests without a panel and applies explicit requests to a mounted panel", async () => {
   const page = editor();
   const panel = page.window.document.querySelector(".selected-shape-actions");
   panel.remove();
