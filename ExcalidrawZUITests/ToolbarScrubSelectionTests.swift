@@ -72,19 +72,45 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         endpoint.tap()
         assertSelection(endpoint, control: control)
 
-        // Releasing outside cancels the preview and keeps the committed endpoint tool.
-        let outside = control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1))
-            .withOffset(CGVector(dx: 0, dy: 30))
+        // Leave vertically so Selection is the last contacted tool, not a crossed neighbor.
+        let outside = cursor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .withOffset(CGVector(dx: 0, dy: control.frame.maxY - cursor.frame.midY + 60))
         cursor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
             forDuration: 0.3, thenDragTo: outside, withVelocity: .slow, thenHoldForDuration: 0.3
         )
-        assertSelection(endpoint, control: control)
-        capture(app, name: "Outside release retains the committed tool")
+        capture(app, name: "Outside release must retain the last contacted Selection tool")
+        assertSelection(cursor, control: control)
         cursor.tap()
         assertSelection(cursor, control: control)
 
         capture(app, name: "Real configured tools after quick taps and forward-reverse scrub")
         // Post-release assertions do not establish the selection shown during either held contact.
+    }
+
+    func testOutsideReleaseKeepsLastContactedToolOnCanvas() {
+        let app = openSyntheticDrawing(stockTracking:
+            ProcessInfo.processInfo.environment["EXCALIDRAWZ_TOOLBAR_STOCK_TRACKING"] == "1")
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let cursor = tool(named: "Selection", in: control)
+        let diamond = tool(named: "Diamond", in: control)
+        XCTAssertTrue(cursor.isHittable)
+        XCTAssertTrue(diamond.isHittable)
+        let canvas = app.webViews.firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 15))
+
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        let start = diamond.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let outside = start.withOffset(CGVector(dx: 0, dy: control.frame.maxY - diamond.frame.midY + 60))
+        // Root records both holds to inspect first contact and retained selection below the row.
+        start.press(forDuration: 3, thenDragTo: outside, withVelocity: .slow, thenHoldForDuration: 3)
+        capture(app, name: "Diamond after release below the tool row")
+        assertSelection(diamond, control: control)
+        drag(in: canvas, from: CGVector(dx: 0.25, dy: 0.35), to: CGVector(dx: 0.40, dy: 0.55))
+        capture(app, name: "Canvas diamond after outside release, inspect actual shape")
+        cursor.tap()
+        assertSelection(cursor, control: control)
     }
 
     func testHeldContactStartsOnAnUnselectedToolInBothDirections() {
@@ -214,7 +240,7 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         }
     }
 
-    private func openSyntheticDrawing() -> XCUIApplication {
+    private func openSyntheticDrawing(stockTracking: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()
         app.launchArguments = [
@@ -222,6 +248,9 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             "-AIChat.isEnabled", "NO", "-DisableCloudSync", "YES",
             "-WhatsNewLastBuild", "999999"
         ]
+        if stockTracking {
+            app.launchArguments.append("-ToolbarStockTrackingProbe")
+        }
         launchedApp = app
         app.launch()
 
