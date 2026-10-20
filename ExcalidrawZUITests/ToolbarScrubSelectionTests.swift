@@ -72,6 +72,17 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         endpoint.tap()
         assertSelection(endpoint, control: control)
 
+        // Releasing outside cancels the preview and keeps the committed endpoint tool.
+        let outside = control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1))
+            .withOffset(CGVector(dx: 0, dy: 30))
+        cursor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+            forDuration: 0.3, thenDragTo: outside, withVelocity: .slow, thenHoldForDuration: 0.3
+        )
+        assertSelection(endpoint, control: control)
+        capture(app, name: "Outside release retains the committed tool")
+        cursor.tap()
+        assertSelection(cursor, control: control)
+
         capture(app, name: "Real configured tools after quick taps and forward-reverse scrub")
         // Post-release assertions do not establish the selection shown during either held contact.
     }

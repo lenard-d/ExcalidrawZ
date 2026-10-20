@@ -136,6 +136,7 @@ struct ExcalidrawToolbar: View {
                     overflowItems: sizeClass == .dense ? presentation.items : pickerItems.secondary,
                     usesPrincipalLabel: true
                 )
+                .menuStyle(.button)
                 .buttonStyle(.plain)
                 .excalidrawToolbarSurface(.circle, padded: false)
             }
