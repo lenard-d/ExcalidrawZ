@@ -313,6 +313,98 @@ final class PageModeUITests: XCTestCase {
         try exerciseNativeResizeAndUndo(layout: "Ruled")
     }
 
+    func testSyntheticGridPageResizeReopenAndInspectPDFExporter() throws {
+        try exerciseResizeReopenAndInspectPDFExporter(layout: "Grid")
+    }
+
+    func testSyntheticRuledPageResizeReopenAndInspectPDFExporter() throws {
+        try exerciseResizeReopenAndInspectPDFExporter(layout: "Ruled")
+    }
+
+    private func exerciseResizeReopenAndInspectPDFExporter(layout: String) throws {
+        let app = try openSyntheticResizePage()
+        let drawingName = "Pages-Resize-\(layout)-" + UUID().uuidString.prefix(8)
+        try renameSyntheticDrawing(drawingName, in: app)
+        try selectTool("Diamond", in: app)
+        try drag(from: CGPoint(x: 700, y: 400), to: CGPoint(x: 800, y: 500), in: app)
+        try selectTool("Selection", in: app)
+        try selectPage("Page 1", in: app)
+        if layout != "Grid" { try setLayout(layout, in: app) }
+        try requireObservedResizeAnchor(in: app, overview: false)
+        let headerY = pageHeader("Page 1", in: app).frame.minY
+        let right = app.buttons["pages.context.add"].firstMatch.frame.maxX
+
+        // The right-edge handle and anchor are the same as the native resize/undo case.
+        try drag(from: CGPoint(x: 1148, y: 555), to: CGPoint(x: 1048, y: 555), in: app)
+        try waitForResize(in: app, step: "\(drawingName) free width resize before leaving") {
+            abs(app.buttons["pages.context.add"].firstMatch.frame.maxX - (right - 100)) < 4
+        }
+        XCTAssertEqual(pageHeader("Page 1", in: app).frame.minY, headerY, accuracy: 3)
+        capture(app, step: "\(drawingName) resized paper and Diamond before Home")
+
+        try reopenSyntheticDrawing(drawingName, in: app)
+        try selectTool("Selection", in: app)
+        try openPages(in: app)
+        let firstPage = app.buttons["pages.open.0"].firstMatch
+        try requireHittable(firstPage, in: app, step: "\(drawingName) persisted page after restart")
+        XCTAssertFalse(app.buttons["pages.open.1"].exists)
+        firstPage.tap()
+        try selectPage("Page 1", in: app)
+        try assertLayout(layout, in: app)
+        capture(app, step: "\(drawingName) reopened, inspect resized paper extent and retained Diamond")
+
+        try openPages(in: app)
+        let exportPDF = app.buttons["Export pages as PDF"].firstMatch
+        let pagesList = app.collectionViews.containing(.button, identifier: "Export pages as PDF").firstMatch
+        if pagesList.exists {
+            for _ in 0..<3 where !exportPDF.isHittable { pagesList.swipeUp(velocity: .slow) }
+        }
+        try requireHittable(exportPDF, in: app, step: "Normal PDF export for \(drawingName)")
+        exportPDF.tap()
+        // Root inspects the generated PDF and destination. Do not guess a Files locator.
+        capture(app, step: "STOP: \(drawingName) PDF export requested, inspect paper bounds and ink separately")
+    }
+
+    private func renameSyntheticDrawing(_ drawingName: String, in app: XCUIApplication) throws {
+        let titleMenu = app.navigationBars.buttons["More"].firstMatch
+        try requireHittable(titleMenu, in: app, step: "Rename only the fresh synthetic drawing")
+        titleMenu.tap()
+        let rename = app.buttons["Rename"].firstMatch
+        try requireHittable(rename, in: app, step: "Observed Rename action")
+        rename.tap()
+        let nameField = app.textFields.firstMatch
+        try requireHittable(nameField, in: app, step: "Observed drawing name field")
+        XCTAssertEqual(app.textFields.count, 1)
+        let oldName = try XCTUnwrap(nameField.value as? String)
+        nameField.tap()
+        nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: oldName.count) + drawingName)
+        let confirmRename = app.buttons["OK"].firstMatch
+        try requireHittable(confirmRename, in: app, step: "Observed Rename confirmation")
+        confirmRename.tap()
+        capture(app, step: "Unique synthetic drawing: " + drawingName)
+    }
+
+    private func reopenSyntheticDrawing(_ drawingName: String, in app: XCUIApplication) throws {
+        let showSidebar = app.buttons["Show Sidebar"].firstMatch
+        if showSidebar.exists && showSidebar.isHittable { showSidebar.tap() }
+        let home = app.buttons["Home"].firstMatch
+        try requireHittable(home, in: app, step: "Leave \(drawingName) through Home")
+        home.tap()
+        capture(app, step: "\(drawingName) left through Home before process restart")
+        app.terminate()
+        app.launch()
+        dismissObservedWhatsNew(in: app)
+        let reopenSidebar = app.buttons["Show Sidebar"].firstMatch
+        if reopenSidebar.exists && reopenSidebar.isHittable { reopenSidebar.tap() }
+        let savedDrawing = app.staticTexts[drawingName].firstMatch
+        let recentLists = app.scrollViews.containing(.staticText, identifier: drawingName).allElementsBoundByIndex
+        if let recentList = recentLists.min(by: { $0.frame.height < $1.frame.height }) {
+            for _ in 0..<6 where !savedDrawing.isHittable { recentList.swipeLeft(velocity: .slow) }
+        }
+        try requireHittable(savedDrawing, in: app, step: "Exact unique synthetic drawing in observed Home recent list")
+        savedDrawing.tap()
+    }
+
     private func openSyntheticResizePage() throws -> XCUIApplication {
         let app = try openSyntheticDrawing()
         try selectTool("Selection", in: app)
