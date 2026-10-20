@@ -3,6 +3,35 @@ import XCTest
 @testable import ExcalidrawZ
 
 final class ToolbarToolOrderTests: XCTestCase {
+    func testAlternateBankKeepsGlobalPositionsIndependentOfDirectCount() {
+        var order = ExcalidrawToolbarToolOrder(directToolCount: 6)
+        order.move(from: IndexSet(integer: 3), to: 11)
+        let restored = ExcalidrawToolbarToolOrder(storedData: order.storedData)
+
+        XCTAssertEqual(restored.directToolCount, 6)
+        XCTAssertEqual(restored.tool(forShortcutNumber: 0), .laser)
+        XCTAssertEqual(restored.tool(forShortcutNumber: 1, alternate: true), .ellipse)
+        XCTAssertEqual(restored.tool(forShortcutNumber: 2, alternate: true), .lasso)
+        XCTAssertEqual(restored.tool(forShortcutNumber: 6, alternate: true), .magicFrame)
+        XCTAssertEqual(restored.shortcutLabel(for: .ellipse, includingAlternate: true), "⌥1")
+        XCTAssertNil(restored.shortcutLabel(for: .ellipse), "Annotation retains first-bank hints only")
+        for number in [0, 7, 8, 9, -1, 10, Int.min, Int.max] {
+            XCTAssertNil(restored.tool(forShortcutNumber: number, alternate: true))
+        }
+    }
+
+    func testAddingToolMovesItsShortcutAcrossTheBankBoundary() {
+        var order = ExcalidrawToolbarToolOrder()
+        XCTAssertEqual(order.tool(forShortcutNumber: 4, alternate: true), .frame)
+        order.addDirectTool(.frame)
+        let restored = ExcalidrawToolbarToolOrder(storedData: order.storedData)
+
+        XCTAssertEqual(restored.tool(forShortcutNumber: 0), .frame)
+        XCTAssertEqual(restored.tool(forShortcutNumber: 1, alternate: true), .eraser)
+        XCTAssertEqual(restored.shortcutLabel(for: .frame, includingAlternate: true), "0")
+        XCTAssertEqual(restored.shortcutLabel(for: .eraser, includingAlternate: true), "⌥1")
+    }
+
     func testReorderedEllipseKeepsItsNumberAfterReload() {
         var order = ExcalidrawToolbarToolOrder()
         order.move(from: IndexSet(integer: 3), to: 6)
