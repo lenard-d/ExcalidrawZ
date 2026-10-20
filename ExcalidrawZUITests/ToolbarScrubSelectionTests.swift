@@ -194,20 +194,37 @@ final class ToolbarScrubSelectionTests: XCTestCase {
 
         let newDrawing = app.buttons["New draw"].firstMatch
         let openedSidebar = !newDrawing.isHittable
-        let sidebar = app.buttons.matching(NSPredicate(format: "label ==[c] %@", "Toggle sidebar")).firstMatch
         if openedSidebar {
-            XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
-            sidebar.tap()
+            let showSidebar = app.navigationBars.buttons["Show Sidebar"].firstMatch
+            guard showSidebar.waitForExistence(timeout: 5), showSidebar.isHittable else {
+                captureSetupFailure(app, name: "Show Sidebar unavailable")
+                XCTFail("The observed Show Sidebar button must be available before opening a new drawing")
+                return app
+            }
+            showSidebar.tap()
         }
         let ready = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "isHittable == true"), object: newDrawing
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+        guard XCTWaiter.wait(for: [ready], timeout: 15) == .completed else {
+            captureSetupFailure(app, name: "New draw unavailable after opening sidebar")
+            XCTFail("New draw must be hittable after opening the sidebar")
+            return app
+        }
         newDrawing.tap()
-        if openedSidebar, newDrawing.isHittable {
-            sidebar.tap()
+        let hideSidebar = app.navigationBars.buttons["Hide Sidebar"].firstMatch
+        if openedSidebar, hideSidebar.exists, hideSidebar.isHittable {
+            hideSidebar.tap()
         }
         return app
+    }
+
+    private func captureSetupFailure(_ app: XCUIApplication, name: String) {
+        capture(app, name: name)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "\(name), full accessibility tree"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
     }
 }
 #endif
