@@ -87,6 +87,38 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         // Post-release assertions do not establish the selection shown during either held contact.
     }
 
+    func testHeldContactStartsOnAnUnselectedToolInBothDirections() {
+        let app = openSyntheticDrawing()
+        let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let cursor = tool(named: "Selection", in: control)
+        let diamond = tool(named: "Diamond", in: control)
+        let line = tool(named: "Line", in: control)
+        let endpoint = line.exists ? line : tool(named: "Arrow", in: control)
+        XCTAssertTrue(cursor.isHittable)
+        XCTAssertTrue(diamond.isHittable)
+        XCTAssertTrue(endpoint.isHittable)
+        XCTAssertLessThan(cursor.frame.midX, diamond.frame.midX)
+        XCTAssertLessThan(diamond.frame.midX, endpoint.frame.midX)
+
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        capture(app, name: "Selection committed before contact on unselected Diamond")
+        // Root inspects the first three seconds for native glass movement before the drag.
+        diamond.press(forDuration: 3, thenDragTo: endpoint, withVelocity: .slow, thenHoldForDuration: 3)
+        assertSelection(endpoint, control: control)
+        capture(app, name: "Forward release after unselected Diamond origin")
+
+        diamond.press(forDuration: 3, thenDragTo: cursor, withVelocity: .slow, thenHoldForDuration: 3)
+        assertSelection(cursor, control: control)
+        capture(app, name: "Reverse release after unselected Diamond origin")
+        diamond.tap()
+        assertSelection(diamond, control: control)
+        cursor.tap()
+        assertSelection(cursor, control: control)
+        // Post-release assertions do not prove native glass animation during contact.
+    }
+
     func testStableLockAndCombinedToolActionsMenu() {
         let app = openSyntheticDrawing()
         let control = app.segmentedControls["toolbar.toolPicker"].firstMatch
