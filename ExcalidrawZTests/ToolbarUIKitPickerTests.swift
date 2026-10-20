@@ -75,6 +75,30 @@ final class ToolbarUIKitPickerTests: XCTestCase {
         XCTAssertEqual(selected, .line, "Accessibility and keyboard actions need no contact")
     }
 
+    func testInBoundsCancellationRestoresSelectionAndAllowsNextContact() {
+        for terminal: UIGestureRecognizer.State in [.cancelled, .failed] {
+            let items = ExcalidrawToolbarToolPresentation(order: .init()).items
+            var selected: ExcalidrawTool? = .ellipse
+            let binding = Binding(get: { selected }, set: { selected = $0 })
+            let (coordinator, control) = makePicker(items: items, selection: binding)
+            let gesture = ScrubInput()
+            control.addGestureRecognizer(gesture)
+
+            send(.began, at: CGPoint(x: 20, y: 22), through: gesture, to: coordinator)
+            send(.changed, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
+            XCTAssertEqual(control.selectedSegmentIndex, 1)
+            XCTAssertEqual(selected, .ellipse)
+            send(terminal, at: CGPoint(x: 60, y: 22), through: gesture, to: coordinator)
+            XCTAssertEqual(selected, .ellipse)
+            XCTAssertEqual(control.selectedSegmentIndex, 3)
+
+            send(.began, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
+            send(.ended, at: CGPoint(x: 220, y: 22), through: gesture, to: coordinator)
+            XCTAssertEqual(selected, .line)
+            XCTAssertEqual(control.selectedSegmentIndex, 5)
+        }
+    }
+
     func testExternalBindingAndReorderInvalidateHeldCommit() {
         let initial = ExcalidrawToolbarToolPresentation(order: .init()).items
         var oldSelection: ExcalidrawTool? = .cursor
