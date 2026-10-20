@@ -36,20 +36,27 @@ final class ToolbarScrubSelectionTests: XCTestCase {
             control.buttons.element(boundBy: index).tap()
             assertSelection(index, control: control)
         }
-        control.buttons.element(boundBy: 2).tap()
-        assertSelection(2, control: control)
+        let diamond = tool(named: "Diamond", in: control)
+        XCTAssertTrue(diamond.exists, "The drawing proof needs the observed Diamond action")
+        diamond.tap()
+        assertSelection(diamond, control: control)
         drag(in: canvas, from: CGVector(dx: 0.25, dy: 0.35), to: CGVector(dx: 0.40, dy: 0.55))
         capture(app, name: "Canvas diamond after quick tap, inspect actual shape")
 
-        let first = control.buttons.element(boundBy: 0)
-        let sixth = control.buttons.element(boundBy: 5)
-        first.press(forDuration: 0.3, thenDragTo: sixth, withVelocity: .slow, thenHoldForDuration: 0.3)
-        assertSelection(5, control: control)
+        let cursor = tool(named: "Selection", in: control)
+        let line = tool(named: "Line", in: control)
+        // Six visible tools in the preserved order include Arrow; Line is in overflow.
+        let endpoint = line.exists ? line : tool(named: "Arrow", in: control)
+        XCTAssertTrue(cursor.exists)
+        XCTAssertTrue(endpoint.exists, "Need a visible named Line or Arrow action for the scrub proof")
+        XCTAssertLessThan(cursor.frame.midX, endpoint.frame.midX)
+        cursor.press(forDuration: 0.3, thenDragTo: endpoint, withVelocity: .slow, thenHoldForDuration: 0.3)
+        assertSelection(endpoint, control: control)
         drag(in: canvas, from: CGVector(dx: 0.55, dy: 0.35), to: CGVector(dx: 0.75, dy: 0.55))
-        capture(app, name: "Canvas line after forward scrub, inspect actual line")
+        capture(app, name: "Canvas after forward scrub to \(endpoint.label), inspect that tool result")
 
-        sixth.press(forDuration: 0.3, thenDragTo: first, withVelocity: .slow, thenHoldForDuration: 0.3)
-        assertSelection(0, control: control)
+        endpoint.press(forDuration: 0.3, thenDragTo: cursor, withVelocity: .slow, thenHoldForDuration: 0.3)
+        assertSelection(cursor, control: control)
         drag(in: canvas, from: CGVector(dx: 0.20, dy: 0.30), to: CGVector(dx: 0.45, dy: 0.60))
         capture(app, name: "Canvas diamond selection after reverse scrub, inspect selection handles")
 
@@ -58,11 +65,11 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         let boundary = control.coordinate(withNormalizedOffset: .zero).withOffset(
             CGVector(dx: second.frame.maxX - control.frame.minX, dy: control.frame.height / 2)
         )
-        boundary.press(forDuration: 0.3, thenDragTo: sixth.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+        boundary.press(forDuration: 0.3, thenDragTo: endpoint.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
                        withVelocity: .slow, thenHoldForDuration: 0.3)
-        assertSelection(5, control: control)
-        sixth.tap()
-        assertSelection(5, control: control)
+        assertSelection(endpoint, control: control)
+        endpoint.tap()
+        assertSelection(endpoint, control: control)
 
         capture(app, name: "Real configured tools after quick taps and forward-reverse scrub")
         // Root records video to verify the native selection preview during the drag.
@@ -83,14 +90,23 @@ final class ToolbarScrubSelectionTests: XCTestCase {
         add(screenshot)
     }
 
+    private func tool(named name: String, in control: XCUIElement) -> XCUIElement {
+        control.buttons.matching(NSPredicate(
+            format: "label == %@ OR label BEGINSWITH %@", name, "\(name) ("
+        )).firstMatch
+    }
+
     private func assertSelection(_ index: Int, control: XCUIElement) {
+        assertSelection(control.buttons.element(boundBy: index), control: control)
+    }
+
+    private func assertSelection(_ button: XCUIElement, control: XCUIElement) {
         let selected = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isSelected == true"),
-            object: control.buttons.element(boundBy: index)
+            predicate: NSPredicate(format: "isSelected == true"), object: button
         )
         XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 3), .completed)
-        for other in 0..<control.buttons.count where other != index {
-            XCTAssertFalse(control.buttons.element(boundBy: other).isSelected)
+        for other in control.buttons.allElementsBoundByIndex where other.label != button.label {
+            XCTAssertFalse(other.isSelected)
         }
     }
 
