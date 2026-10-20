@@ -164,6 +164,18 @@ struct ExcalidrawToolbar: View {
                     withFooter: withFooter
                 )
             }
+            .apply { picker in
+#if DEBUG && os(iOS) && targetEnvironment(simulator)
+                if let kind = ToolbarNativeControlProbe.requestedKind {
+                    ToolbarNativeControlProbe(kind: kind)
+                        .frame(width: 240, height: 58)
+                } else {
+                    picker
+                }
+#else
+                picker
+#endif
+            }
             .padding({
                 if #available(macOS 26.0, iOS 26.0, *) {
                     .top
