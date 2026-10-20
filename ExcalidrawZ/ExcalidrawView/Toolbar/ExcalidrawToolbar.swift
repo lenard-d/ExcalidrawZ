@@ -164,6 +164,22 @@ struct ExcalidrawToolbar: View {
                     withFooter: withFooter
                 )
             }
+            .apply { picker in
+#if os(iOS)
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    ExcalidrawToolbarUIKitPicker(
+                        items: primaryPickerItems,
+                        selection: $toolState.activatedTool,
+                        size: size,
+                        withFooter: withFooter
+                    )
+                } else {
+                    picker
+                }
+#else
+                picker
+#endif
+            }
             .padding({
                 if #available(macOS 26.0, iOS 26.0, *) {
                     .top
