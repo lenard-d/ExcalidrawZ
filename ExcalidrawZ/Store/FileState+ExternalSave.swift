@@ -34,6 +34,26 @@ extension FileState {
     }
 
     @MainActor
+    func prepareExternalFileReload(at url: URL) async throws -> (content: Data, session: UUID)? {
+        let owner = terminationSaveToken
+        let version = try await Task.detached(priority: .utility) {
+            try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
+                try await ExternalFileVersion.read(at: url)
+            }
+        }.value
+        guard terminationSaveToken == owner else { throw CancellationError() }
+        let replacement = try await ExternalFileSaveCoordinator.shared.prepareReload(
+            version, at: url, session: owner.session,
+            hasPendingCanvasEdits: hasPendingExternalSnapshot
+        )
+        guard terminationSaveToken == owner else {
+            if let replacement { await releaseUnusedExternalSaveSession(replacement) }
+            throw CancellationError()
+        }
+        return replacement.map { (version.content, $0) }
+    }
+
+    @MainActor
     func saveRestoredExternalCanvas(_ file: ExcalidrawFile, at url: URL) async throws {
         guard let activeFile = currentActiveFile,
               let target = capturedCanvasSaveTarget(for: activeFile),

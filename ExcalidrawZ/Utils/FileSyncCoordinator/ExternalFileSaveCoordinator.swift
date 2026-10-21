@@ -13,6 +13,13 @@ struct ExternalFileVersion: @unchecked Sendable {
             .fileResourceIdentifier as? NSObject
     }
 
+    /// Reads bytes and identity in the same coordinated access, not from a cached notification.
+    static func read(at url: URL) async throws -> ExternalFileVersion {
+        try await FileCoordinator.shared.coordinatedRead(url: url) { target in
+            try ExternalFileVersion(content: Data(contentsOf: target), at: target)
+        }
+    }
+
     func validateReplacement(of current: ExternalFileVersion) throws {
         guard content == current.content,
               identity == current.identity else {
@@ -72,6 +79,22 @@ actor ExternalFileSaveCoordinator {
         guard pending[key] == nil, writes[key.url] == nil else { return false }
         baselines[key] = version
         return true
+    }
+
+    /// Prepares a replacement session without discarding pending editor content.
+    func prepareReload(_ version: ExternalFileVersion, at url: URL, session: UUID?, hasPendingCanvasEdits: Bool) throws -> UUID? {
+        let key = Target(url: url.standardizedFileURL, session: session)
+        if let baseline = baselines[key],
+           baseline.content == version.content,
+           baseline.identity == version.identity {
+            return nil
+        }
+        guard !hasPendingCanvasEdits, pending[key] == nil, writes[key.url] == nil else {
+            throw ExternalFileConflict()
+        }
+        let replacement = UUID()
+        baselines[Target(url: key.url, session: replacement)] = version
+        return replacement
     }
 
     /// Clean sessions can release large drawing baselines. Failed and active saves stay retained.

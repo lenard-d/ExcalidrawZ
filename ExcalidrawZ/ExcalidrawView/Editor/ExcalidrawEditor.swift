@@ -1175,6 +1175,7 @@ struct ExcalidrawEditor: View {
         let reloadOwnerToken = await MainActor.run { fileState.terminationSaveToken }
         let reloadRevision = reloadOwnerToken.editRevision
         let reloadEditTime = latestLocalCanvasEditTime()
+        var reloadData = latestData
         var acceptedSession: UUID?
         defer {
             if let session = acceptedSession {
@@ -1183,13 +1184,12 @@ struct ExcalidrawEditor: View {
         }
         switch targetFile {
             case .localFile(let url), .temporaryFile(let url):
-                if await ExternalFileSaveCoordinator.shared.pendingContent(at: url, session: fileState.externalSaveSessionID) != nil
-                    || fileState.excalidrawWebCoordinator?.documentSyncController.hasPendingDirtySnapshot == true {
-                    fileState.reportExternalSaveFailure(ExternalFileConflict(), at: url)
-                    return
-                }
                 do {
-                    acceptedSession = try await fileState.recordExternalFileRead(latestData, at: url)
+                    guard let reload = try await fileState.prepareExternalFileReload(at: url) else { return }
+                    acceptedSession = reload.session
+                    reloadData = reload.content
+                } catch is CancellationError {
+                    return
                 } catch {
                     fileState.reportExternalSaveFailure(error, at: url)
                     return
@@ -1203,11 +1203,11 @@ struct ExcalidrawEditor: View {
             if case .file = targetFile {
                 data = try await ExcalidrawViewportStateStore.shared
                     .contentDataByApplyingStoredViewport(
-                        to: latestData,
+                        to: reloadData,
                         fileID: targetFileID
                     )
             } else {
-                data = latestData
+                data = reloadData
             }
             guard !Task.isCancelled else { return }
             let file = try ExcalidrawFile(data: data, id: targetFileID)
