@@ -267,13 +267,13 @@ final class ExternalFileReloadTests: XCTestCase {
         _ = await coordinator.recordRead(try read(url), at: url, session: session)
         let reads = ReloadReadCounter()
         let saved = saved
-        let replacement = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true) { target in
+        let replacement = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true, reader: { target in
             let version = try await ExternalFileVersion.read(at: target)
             if await reads.next() == 1 {
                 try await coordinator.save(saved, to: target, session: session, writer: ExternalFileWriter.write)
             }
             return version
-        }
+        })
         XCTAssertNil(replacement)
         let count = await reads.count
         XCTAssertEqual(count, 2)
@@ -323,12 +323,12 @@ final class ExternalFileReloadTests: XCTestCase {
         _ = await coordinator.recordRead(try read(url), at: url, session: session)
         let reads = ReloadReadCounter()
         do {
-            _ = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true) { target in
+            _ = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true, reader: { target in
                 let version = try await ExternalFileVersion.read(at: target)
                 let count = await reads.next()
                 try await coordinator.save(Data("save-\(count)".utf8), to: target, session: session, writer: ExternalFileWriter.write)
                 return version
-            }
+            })
             XCTFail("An unsettled read cannot install a replacement session")
         } catch is CancellationError { }
         let count = await reads.count
@@ -422,7 +422,7 @@ final class ExternalFileReloadTests: XCTestCase {
         }
         let reads = ReloadReadCounter()
         let reload = Task {
-            let result = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true) { target in
+            let result = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true, reader: { target in
                 let firstRead = await reads.next() == 1
                 if firstRead {
                     await startWrite.release()
@@ -431,7 +431,7 @@ final class ExternalFileReloadTests: XCTestCase {
                 let version = try await ExternalFileVersion.read(at: target)
                 if firstRead { readReturned.fulfill() }
                 return version
-            }
+            })
             finished.fulfill()
             return result
         }
