@@ -14,7 +14,7 @@ struct ExternalFileVersion: @unchecked Sendable {
     }
 
     /// Reads bytes and identity in the same coordinated access, not from a cached notification.
-    static func read(at url: URL) async throws -> ExternalFileVersion {
+    @Sendable static func read(at url: URL) async throws -> ExternalFileVersion {
         try await FileCoordinator.shared.coordinatedRead(url: url) { target in
             try ExternalFileVersion(content: Data(contentsOf: target), at: target)
         }
@@ -50,6 +50,7 @@ struct ExternalFileSaveFailure: LocalizedError {
 actor ExternalFileSaveCoordinator {
     typealias Writer = @Sendable (Data, URL, ExternalFileVersion) async throws -> ExternalFileVersion
     typealias Reader = @Sendable (URL) async throws -> ExternalFileVersion
+    enum ReloadWriteWait { case selected, finished }
 
     static let shared = ExternalFileSaveCoordinator()
 
@@ -85,13 +86,17 @@ actor ExternalFileSaveCoordinator {
     /// A receipt can advance while the coordinated read waits. Retry only that unsettled read.
     func prepareReload(
         at url: URL, session: UUID?, hasPendingCanvasEdits: Bool,
+        observeWriteWait: (@Sendable (ReloadWriteWait) async throws -> Void)? = nil,
         reader: Reader = ExternalFileVersion.read
     ) async throws -> (content: Data, session: UUID)? {
         let key = Target(url: url.standardizedFileURL, session: session)
         for _ in 0..<3 {
             try Task.checkCancellation()
             let awaitedGeneration = writeGenerations[key.url]
-            await writes[key.url]?.value
+            let awaitedWrite = writes[key.url]
+            try await observeWriteWait?(.selected)
+            await awaitedWrite?.value
+            try await observeWriteWait?(.finished)
             guard awaitedGeneration == writeGenerations[key.url],
                   !activeWrites.contains(where: { $0.url == key.url }) else { continue }
             let writeGeneration = writeGenerations[key.url]

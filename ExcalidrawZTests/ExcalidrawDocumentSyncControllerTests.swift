@@ -10,6 +10,68 @@ import XCTest
 /// Requires the isolated simulator app host. The inline page replaces only the web application.
 final class ExcalidrawDocumentSyncControllerTests: XCTestCase {
     @MainActor
+    func testExternalReloadPreparationRejectsSameFileEditDuringRead() async throws {
+        let fixture = try await CanvasControllerFixture.open()
+        addTeardownBlock { await fixture.close() }
+        let state = fixture.state
+        let originalOwner = state.terminationSaveToken
+        let gate = SaveTestGate()
+        let reload = Task {
+            try await state.prepareExternalFileReload { _, _ in
+                try await gate.pause()
+                return nil
+            }
+        }
+        fixture.cancelOnClose(reload)
+        try await gate.waitUntilPaused()
+        try await fixture.setScene(2)
+        let message = try fixture.stateMessage(["revision": 2, "contentDirty": true])
+        _ = try XCTUnwrap(fixture.core.documentSyncController.admitStateChanged(message))
+        let current = state.terminationSaveToken
+        XCTAssertEqual(current.fileID, originalOwner.fileID)
+        XCTAssertEqual(current.session, originalOwner.session)
+        XCTAssertEqual(current.loadGeneration, originalOwner.loadGeneration)
+        XCTAssertNotEqual(current.editRevision, originalOwner.editRevision)
+        state.externalSaveErrorMessage = "Current synthetic error"
+        await gate.release()
+        do { _ = try await boundedSaveTestValue(reload); XCTFail("A newer edit must invalidate the old preparation") }
+        catch is CancellationError { }
+        XCTAssertEqual(state.terminationSaveToken, current)
+        XCTAssertEqual(state.externalSaveErrorMessage, "Current synthetic error")
+    }
+
+    @MainActor
+    func testExternalReloadPreparationRejectsOldErrorAfterSameFileReload() async throws {
+        let fixture = try await CanvasControllerFixture.open()
+        addTeardownBlock { await fixture.close() }
+        let state = fixture.state
+        let originalOwner = state.terminationSaveToken
+        let gate = SaveTestGate()
+        let preparation = Task {
+            try await state.prepareExternalFileReload { _, _ in
+                try await gate.pause()
+                throw CocoaError(.fileReadNoPermission)
+            }
+        }
+        fixture.cancelOnClose(preparation)
+        try await gate.waitUntilPaused()
+        let load = Task { await fixture.core.documentSyncController.load(fixture.model.file, force: true).didLoad }
+        fixture.cancelOnClose(load)
+        let didLoad = try await boundedSaveTestValue(load)
+        XCTAssertTrue(didLoad)
+        let current = state.terminationSaveToken
+        XCTAssertEqual(current.fileID, originalOwner.fileID)
+        XCTAssertEqual(current.session, originalOwner.session)
+        XCTAssertNotEqual(current.loadGeneration, originalOwner.loadGeneration)
+        state.externalSaveErrorMessage = "Replacement load error"
+        await gate.release()
+        do { _ = try await boundedSaveTestValue(preparation); XCTFail("The previous load's error must cancel") }
+        catch is CancellationError { }
+        XCTAssertEqual(state.terminationSaveToken, current)
+        XCTAssertEqual(state.externalSaveErrorMessage, "Replacement load error")
+    }
+
+    @MainActor
     func testMetadataSupersedingUnmaterializedContentStillSchedulesItsCompletedScene() async throws {
         let fixture = try await CanvasControllerFixture.open(library: true)
         addTeardownBlock { await fixture.close() }

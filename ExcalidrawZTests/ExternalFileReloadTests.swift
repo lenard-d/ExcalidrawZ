@@ -187,6 +187,79 @@ final class ExternalFileReloadTests: XCTestCase {
         await coordinator.releaseSession(session)
     }
 
+    @MainActor
+    func testStaleSuccessfulPreparationReleasesReplacementAndPreservesCurrentOwner() async throws {
+        let url = try fixture()
+        let state = FileState()
+        let session = try await state.recordExternalFileRead(original, at: url)
+        state.installExternalSaveSession(session)
+        try saved.write(to: url)
+        let gate = ReloadReceiptGate()
+        var abandoned: UUID?
+        let reload = Task {
+            try await state.prepareExternalFileReload { owner, pending in
+                let result = try await ExternalFileSaveCoordinator.shared.prepareReload(
+                    at: url, session: owner.session, hasPendingCanvasEdits: pending
+                )
+                abandoned = result?.session
+                try await gate.pause()
+                return result
+            }
+        }
+        await gate.waitUntilPaused()
+        state.installExternalSaveSession(UUID())
+        state.reportExternalSaveFailure(CocoaError(.fileWriteNoPermission), at: url, force: true)
+        let current = state.terminationSaveToken
+        let liveError = state.externalSaveErrorMessage
+        await gate.release()
+        do { _ = try await reload.value; XCTFail("A stale result must cancel") }
+        catch is CancellationError { }
+        XCTAssertEqual(state.terminationSaveToken, current)
+        XCTAssertEqual(state.externalSaveErrorMessage, liveError)
+        let replacement = try XCTUnwrap(abandoned)
+        do {
+            try await ExternalFileSaveCoordinator.shared.forkSession(at: url, from: replacement, to: UUID())
+            XCTFail("The discarded replacement baseline must be released")
+        } catch is ExternalFileSaveFailure { }
+        XCTAssertEqual(try Data(contentsOf: url), saved)
+        await ExternalFileSaveCoordinator.shared.releaseSession(session)
+    }
+
+    @MainActor
+    func testStaleReadErrorBecomesCancellationWithoutReplacingCurrentError() async throws {
+        let url = try fixture()
+        let state = FileState()
+        let gate = ReloadReceiptGate()
+        let reload = Task {
+            try await state.prepareExternalFileReload { _, _ in
+                try await gate.pause()
+                throw CocoaError(.fileReadNoPermission)
+            }
+        }
+        await gate.waitUntilPaused()
+        state.installExternalSaveSession(UUID())
+        state.reportExternalSaveFailure(CocoaError(.fileWriteNoPermission), at: url, force: true)
+        let current = state.terminationSaveToken
+        let liveError = state.externalSaveErrorMessage
+        await gate.release()
+        do { _ = try await reload.value; XCTFail("A stale read error must cancel") }
+        catch is CancellationError { }
+        XCTAssertEqual(state.terminationSaveToken, current)
+        XCTAssertEqual(state.externalSaveErrorMessage, liveError)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
+    @MainActor
+    func testCurrentOwnerReadErrorStillPropagates() async throws {
+        let state = FileState()
+        let owner = state.terminationSaveToken
+        do {
+            _ = try await state.prepareExternalFileReload { _, _ in throw CocoaError(.fileReadNoPermission) }
+            XCTFail("A current read failure must not become cancellation")
+        } catch let error as CocoaError { XCTAssertEqual(error.code, .fileReadNoPermission) }
+        XCTAssertEqual(state.terminationSaveToken, owner)
+    }
+
     func testSaveCompletingAfterReadForcesAFreshVersionBeforeComparison() async throws {
         let url = try fixture()
         let coordinator = ExternalFileSaveCoordinator()
@@ -280,16 +353,31 @@ final class ExternalFileReloadTests: XCTestCase {
             }
         }
         await firstGate.waitUntilPaused()
-        let started = XCTestExpectation(description: "Reload starts while A is held")
+        let reads = ReloadReadCounter()
+        let resumes = ReloadReadCounter()
+        let selectedA = ReloadReceiptGate()
+        let resumedA = XCTestExpectation(description: "Reload resumes A while B receipt is held")
         let finished = XCTestExpectation(description: "Reload waits for B receipt")
         finished.isInverted = true
         let reload = Task {
-            started.fulfill()
-            let result = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true)
+            let result = try await coordinator.prepareReload(
+                at: url, session: session, hasPendingCanvasEdits: true,
+                observeWriteWait: { phase in
+                    switch phase {
+                        case .selected:
+                            if await reads.next() == 1 { try await selectedA.pause() }
+                        case .finished:
+                            if await resumes.next() == 1 {
+                                await secondGate.waitUntilPaused()
+                                resumedA.fulfill()
+                            }
+                    }
+                }
+            )
             finished.fulfill()
             return result
         }
-        await fulfillment(of: [started], timeout: 1)
+        await selectedA.waitUntilPaused()
         let second = Task {
             try await coordinator.save(latest, to: url, session: session) { content, target, baseline in
                 let receipt = try await ExternalFileWriter.write(content, to: target, replacing: baseline)
@@ -302,8 +390,9 @@ final class ExternalFileReloadTests: XCTestCase {
             guard ContinuousClock.now < deadline else { throw ReloadReceiptError.timeout }
             try await Task.sleep(for: .milliseconds(1))
         }
+        await selectedA.release()
         await firstGate.release()
-        await secondGate.waitUntilPaused()
+        await fulfillment(of: [resumedA], timeout: 2)
         XCTAssertEqual(try Data(contentsOf: url), latest)
         await fulfillment(of: [finished], timeout: 0.1)
         await secondGate.release()

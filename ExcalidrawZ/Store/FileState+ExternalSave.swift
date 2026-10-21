@@ -35,15 +35,24 @@ extension FileState {
 
     @MainActor
     func prepareExternalFileReload(at url: URL) async throws -> (content: Data, session: UUID)? {
-        let owner = terminationSaveToken
-        let hasPendingCanvasEdits = hasPendingExternalSnapshot
-        let replacement: (content: Data, session: UUID)?
-        do {
-            replacement = try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
+        try await prepareExternalFileReload { owner, hasPendingCanvasEdits in
+            try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
                 try await ExternalFileSaveCoordinator.shared.prepareReload(
                     at: url, session: owner.session, hasPendingCanvasEdits: hasPendingCanvasEdits
                 )
             }
+        }
+    }
+
+    @MainActor
+    func prepareExternalFileReload(
+        preparation: (ExternalSaveTerminationToken, Bool) async throws -> (content: Data, session: UUID)?
+    ) async throws -> (content: Data, session: UUID)? {
+        let owner = terminationSaveToken
+        let hasPendingCanvasEdits = hasPendingExternalSnapshot
+        let replacement: (content: Data, session: UUID)?
+        do {
+            replacement = try await preparation(owner, hasPendingCanvasEdits)
         } catch {
             guard terminationSaveToken == owner else { throw CancellationError() }
             throw error
