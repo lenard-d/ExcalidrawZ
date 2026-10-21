@@ -36,21 +36,23 @@ extension FileState {
     @MainActor
     func prepareExternalFileReload(at url: URL) async throws -> (content: Data, session: UUID)? {
         let owner = terminationSaveToken
-        let version = try await Task.detached(priority: .utility) {
-            try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
-                try await ExternalFileVersion.read(at: url)
+        let hasPendingCanvasEdits = hasPendingExternalSnapshot
+        let replacement: (content: Data, session: UUID)?
+        do {
+            replacement = try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
+                try await ExternalFileSaveCoordinator.shared.prepareReload(
+                    at: url, session: owner.session, hasPendingCanvasEdits: hasPendingCanvasEdits
+                )
             }
-        }.value
-        guard terminationSaveToken == owner else { throw CancellationError() }
-        let replacement = try await ExternalFileSaveCoordinator.shared.prepareReload(
-            version, at: url, session: owner.session,
-            hasPendingCanvasEdits: hasPendingExternalSnapshot
-        )
+        } catch {
+            guard terminationSaveToken == owner else { throw CancellationError() }
+            throw error
+        }
         guard terminationSaveToken == owner else {
-            if let replacement { await releaseUnusedExternalSaveSession(replacement) }
+            if let replacement { await releaseUnusedExternalSaveSession(replacement.session) }
             throw CancellationError()
         }
-        return replacement.map { (version.content, $0) }
+        return replacement
     }
 
     @MainActor

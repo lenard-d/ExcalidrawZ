@@ -49,6 +49,7 @@ struct ExternalFileSaveFailure: LocalizedError {
 /// This is not crash recovery. Only a successful writer advances the baseline.
 actor ExternalFileSaveCoordinator {
     typealias Writer = @Sendable (Data, URL, ExternalFileVersion) async throws -> ExternalFileVersion
+    typealias Reader = @Sendable (URL) async throws -> ExternalFileVersion
 
     static let shared = ExternalFileSaveCoordinator()
 
@@ -81,20 +82,38 @@ actor ExternalFileSaveCoordinator {
         return true
     }
 
-    /// Prepares a replacement session without discarding pending editor content.
-    func prepareReload(_ version: ExternalFileVersion, at url: URL, session: UUID?, hasPendingCanvasEdits: Bool) throws -> UUID? {
+    /// A receipt can advance while the coordinated read waits. Retry only that unsettled read.
+    func prepareReload(
+        at url: URL, session: UUID?, hasPendingCanvasEdits: Bool,
+        reader: Reader = ExternalFileVersion.read
+    ) async throws -> (content: Data, session: UUID)? {
         let key = Target(url: url.standardizedFileURL, session: session)
-        if let baseline = baselines[key],
-           baseline.content == version.content,
-           baseline.identity == version.identity {
-            return nil
+        for _ in 0..<3 {
+            try Task.checkCancellation()
+            let awaitedGeneration = writeGenerations[key.url]
+            await writes[key.url]?.value
+            guard awaitedGeneration == writeGenerations[key.url],
+                  !activeWrites.contains(where: { $0.url == key.url }) else { continue }
+            let writeGeneration = writeGenerations[key.url]
+            let baseline = baselines[key]
+            let version = try await reader(key.url)
+            try Task.checkCancellation()
+            guard writeGeneration == writeGenerations[key.url],
+                  !activeWrites.contains(where: { $0.url == key.url }),
+                  baseline?.content == baselines[key]?.content,
+                  baseline?.identity == baselines[key]?.identity else { continue }
+            if let baseline = baselines[key],
+               baseline.content == version.content,
+               baseline.identity == version.identity {
+                return nil
+            }
+            guard !hasPendingCanvasEdits, pending[key] == nil else { throw ExternalFileConflict() }
+            let replacement = UUID()
+            baselines[Target(url: key.url, session: replacement)] = version
+            return (version.content, replacement)
         }
-        guard !hasPendingCanvasEdits, pending[key] == nil, writes[key.url] == nil else {
-            throw ExternalFileConflict()
-        }
-        let replacement = UUID()
-        baselines[Target(url: key.url, session: replacement)] = version
-        return replacement
+        // Leave live edits and the confirmed baseline intact until a stable notification can be read.
+        throw CancellationError()
     }
 
     /// Clean sessions can release large drawing baselines. Failed and active saves stay retained.

@@ -26,8 +26,7 @@ final class ExternalFileReloadTests: XCTestCase {
         let session = UUID()
         _ = await coordinator.recordRead(try read(url), at: url, session: session)
         try await coordinator.save(saved, to: url, session: session, writer: ExternalFileWriter.write)
-        let notification = try read(url)
-        let replacement = try await coordinator.prepareReload(notification, at: url, session: session, hasPendingCanvasEdits: true)
+        let replacement = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true)
         XCTAssertNil(replacement)
         XCTAssertEqual(try Data(contentsOf: url), saved)
         try await coordinator.save(latest, to: url, session: session, writer: ExternalFileWriter.write)
@@ -43,7 +42,7 @@ final class ExternalFileReloadTests: XCTestCase {
             try await coordinator.save(latest, to: url, session: session) { _, _, _ in throw CocoaError(.fileWriteNoPermission) }
             XCTFail("The injected write must fail")
         } catch is ExternalFileSaveFailure { }
-        let replacement = try await coordinator.prepareReload(try read(url), at: url, session: session, hasPendingCanvasEdits: true)
+        let replacement = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true)
         XCTAssertNil(replacement)
         let pending = await coordinator.pendingContent(at: url, session: session)
         XCTAssertEqual(pending, latest)
@@ -58,7 +57,7 @@ final class ExternalFileReloadTests: XCTestCase {
         _ = await coordinator.recordRead(try read(url), at: url, session: session)
         try saved.write(to: url)
         do {
-            _ = try await coordinator.prepareReload(try read(url), at: url, session: session, hasPendingCanvasEdits: true)
+            _ = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true)
             XCTFail("A real changed version must not replace a live stroke")
         } catch is ExternalFileConflict { }
         do {
@@ -84,7 +83,7 @@ final class ExternalFileReloadTests: XCTestCase {
         XCTAssertNotNil(baseline.identity)
         XCTAssertNotEqual(baseline.identity, replacement.identity)
         do {
-            _ = try await coordinator.prepareReload(replacement, at: url, session: session, hasPendingCanvasEdits: true)
+            _ = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true)
             XCTFail("Equal bytes cannot hide a different file identity")
         } catch is ExternalFileConflict { }
         do {
@@ -102,8 +101,8 @@ final class ExternalFileReloadTests: XCTestCase {
         let oldSession = UUID()
         _ = await coordinator.recordRead(try read(url), at: url, session: oldSession)
         try saved.write(to: url)
-        let prepared = try await coordinator.prepareReload(try read(url), at: url, session: oldSession, hasPendingCanvasEdits: false)
-        let newSession = try XCTUnwrap(prepared)
+        let prepared = try await coordinator.prepareReload(at: url, session: oldSession, hasPendingCanvasEdits: false)
+        let newSession = try XCTUnwrap(prepared).session
         do {
             try await coordinator.save(latest, to: url, session: oldSession, writer: ExternalFileWriter.write)
             XCTFail("Preparation cannot change the old session baseline")
@@ -121,7 +120,7 @@ final class ExternalFileReloadTests: XCTestCase {
         _ = await coordinator.recordRead(try read(url), at: url, session: second)
         try await coordinator.save(saved, to: url, session: first, writer: ExternalFileWriter.write)
         do {
-            _ = try await coordinator.prepareReload(try read(url), at: url, session: second, hasPendingCanvasEdits: true)
+            _ = try await coordinator.prepareReload(at: url, session: second, hasPendingCanvasEdits: true)
             XCTFail("A different session must not absorb the first session's saved version")
         } catch is ExternalFileConflict { }
     }
@@ -187,4 +186,202 @@ final class ExternalFileReloadTests: XCTestCase {
         await coordinator.releaseSession(replacement.session)
         await coordinator.releaseSession(session)
     }
+
+    func testSaveCompletingAfterReadForcesAFreshVersionBeforeComparison() async throws {
+        let url = try fixture()
+        let coordinator = ExternalFileSaveCoordinator()
+        let session = UUID()
+        _ = await coordinator.recordRead(try read(url), at: url, session: session)
+        let reads = ReloadReadCounter()
+        let saved = saved
+        let replacement = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true) { target in
+            let version = try await ExternalFileVersion.read(at: target)
+            if await reads.next() == 1 {
+                try await coordinator.save(saved, to: target, session: session, writer: ExternalFileWriter.write)
+            }
+            return version
+        }
+        XCTAssertNil(replacement)
+        let count = await reads.count
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(try Data(contentsOf: url), saved)
+        try await coordinator.save(latest, to: url, session: session, writer: ExternalFileWriter.write)
+        XCTAssertEqual(try Data(contentsOf: url), latest)
+    }
+
+    func testReadWaitsForWrittenBytesToReceiveTheirOwnSaveReceipt() async throws {
+        let url = try fixture()
+        let coordinator = ExternalFileSaveCoordinator()
+        let session = UUID()
+        _ = await coordinator.recordRead(try read(url), at: url, session: session)
+        let gate = ReloadReceiptGate()
+        let save = Task {
+            try await coordinator.save(saved, to: url, session: session) { content, target, baseline in
+                let receipt = try await ExternalFileWriter.write(content, to: target, replacing: baseline)
+                try await gate.pause()
+                return receipt
+            }
+        }
+        await gate.waitUntilPaused()
+        XCTAssertEqual(try Data(contentsOf: url), saved)
+        let entered = XCTestExpectation(description: "Reload started")
+        let finished = XCTestExpectation(description: "No admission before receipt")
+        finished.isInverted = true
+        let reload = Task {
+            entered.fulfill()
+            let result = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true)
+            finished.fulfill()
+            return result
+        }
+        await fulfillment(of: [entered], timeout: 1)
+        await fulfillment(of: [finished], timeout: 0.1)
+        await gate.release()
+        try await save.value
+        let replacement = try await reload.value
+        XCTAssertNil(replacement)
+        try await coordinator.save(latest, to: url, session: session, writer: ExternalFileWriter.write)
+        XCTAssertEqual(try Data(contentsOf: url), latest)
+    }
+
+    func testContinuallySupersededReadCancelsWithoutAdoptingAStaleVersion() async throws {
+        let url = try fixture()
+        let coordinator = ExternalFileSaveCoordinator()
+        let session = UUID()
+        _ = await coordinator.recordRead(try read(url), at: url, session: session)
+        let reads = ReloadReadCounter()
+        do {
+            _ = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true) { target in
+                let version = try await ExternalFileVersion.read(at: target)
+                let count = await reads.next()
+                try await coordinator.save(Data("save-\(count)".utf8), to: target, session: session, writer: ExternalFileWriter.write)
+                return version
+            }
+            XCTFail("An unsettled read cannot install a replacement session")
+        } catch is CancellationError { }
+        let count = await reads.count
+        XCTAssertEqual(count, 3)
+        XCTAssertEqual(try Data(contentsOf: url), Data("save-3".utf8))
+        try await coordinator.save(latest, to: url, session: session, writer: ExternalFileWriter.write)
+        XCTAssertEqual(try Data(contentsOf: url), latest)
+    }
+
+    func testNewQueuedWriterAfterFirstWaitMustPublishItsReceiptBeforeReload() async throws {
+        let url = try fixture()
+        let coordinator = ExternalFileSaveCoordinator()
+        let session = UUID()
+        _ = await coordinator.recordRead(try read(url), at: url, session: session)
+        let firstGate = ReloadReceiptGate()
+        let secondGate = ReloadReceiptGate()
+        let first = Task {
+            try await coordinator.save(saved, to: url, session: session) { content, target, baseline in
+                let receipt = try await ExternalFileWriter.write(content, to: target, replacing: baseline)
+                try await firstGate.pause()
+                return receipt
+            }
+        }
+        await firstGate.waitUntilPaused()
+        let started = XCTestExpectation(description: "Reload starts while A is held")
+        let finished = XCTestExpectation(description: "Reload waits for B receipt")
+        finished.isInverted = true
+        let reload = Task {
+            started.fulfill()
+            let result = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true)
+            finished.fulfill()
+            return result
+        }
+        await fulfillment(of: [started], timeout: 1)
+        let second = Task {
+            try await coordinator.save(latest, to: url, session: session) { content, target, baseline in
+                let receipt = try await ExternalFileWriter.write(content, to: target, replacing: baseline)
+                try await secondGate.pause()
+                return receipt
+            }
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while await coordinator.pendingContent(at: url, session: session) != latest {
+            guard ContinuousClock.now < deadline else { throw ReloadReceiptError.timeout }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        await firstGate.release()
+        await secondGate.waitUntilPaused()
+        XCTAssertEqual(try Data(contentsOf: url), latest)
+        await fulfillment(of: [finished], timeout: 0.1)
+        await secondGate.release()
+        try await first.value
+        try await second.value
+        let replacement = try await reload.value
+        XCTAssertNil(replacement)
+    }
+
+    func testWriterStartingDuringReadMustFinishBeforeItsBytesAreCompared() async throws {
+        let url = try fixture()
+        let coordinator = ExternalFileSaveCoordinator()
+        let session = UUID()
+        _ = await coordinator.recordRead(try read(url), at: url, session: session)
+        let startWrite = ReloadReceiptGate()
+        let receiptGate = ReloadReceiptGate()
+        let readReturned = XCTestExpectation(description: "Read contains B before B receipt")
+        let finished = XCTestExpectation(description: "Reload waits for the receipt after reading B")
+        finished.isInverted = true
+        let save = Task {
+            try await startWrite.pause()
+            try await coordinator.save(saved, to: url, session: session) { content, target, baseline in
+                let receipt = try await ExternalFileWriter.write(content, to: target, replacing: baseline)
+                try await receiptGate.pause()
+                return receipt
+            }
+        }
+        let reads = ReloadReadCounter()
+        let reload = Task {
+            let result = try await coordinator.prepareReload(at: url, session: session, hasPendingCanvasEdits: true) { target in
+                let firstRead = await reads.next() == 1
+                if firstRead {
+                    await startWrite.release()
+                    await receiptGate.waitUntilPaused()
+                }
+                let version = try await ExternalFileVersion.read(at: target)
+                if firstRead { readReturned.fulfill() }
+                return version
+            }
+            finished.fulfill()
+            return result
+        }
+        await fulfillment(of: [readReturned], timeout: 2)
+        XCTAssertEqual(try Data(contentsOf: url), saved)
+        await fulfillment(of: [finished], timeout: 0.1)
+        await receiptGate.release()
+        try await save.value
+        let replacement = try await reload.value
+        XCTAssertNil(replacement)
+        let count = await reads.count
+        XCTAssertGreaterThanOrEqual(count, 2)
+    }
+}
+
+private actor ReloadReadCounter {
+    private(set) var count = 0
+    func next() -> Int { count += 1; return count }
+}
+
+private enum ReloadReceiptError: Error { case timeout }
+
+private actor ReloadReceiptGate {
+    private nonisolated let entered = XCTestExpectation(description: "Bytes written, receipt held")
+    private var released = false
+
+    func pause() async throws {
+        entered.fulfill()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !released {
+            guard ContinuousClock.now < deadline else { throw ReloadReceiptError.timeout }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
+    nonisolated func waitUntilPaused() async {
+        let result = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
+        XCTAssertEqual(result, .completed)
+    }
+
+    func release() { released = true }
 }
