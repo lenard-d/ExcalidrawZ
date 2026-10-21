@@ -212,8 +212,7 @@ private final class ExportMediaStore {
     )
 
     init(concurrencyType: NSManagedObjectContextConcurrencyType = .privateQueueConcurrencyType) throws {
-        let modelURL = try XCTUnwrap(Bundle.main.url(forResource: "Model", withExtension: "momd"))
-        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let model = PersistenceController.shared.container.managedObjectModel
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         coordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
