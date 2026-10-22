@@ -192,12 +192,16 @@ struct GeneralSettingsView: View {
             Toggle(
                 .localizable(.settingsICloudToggleDisable),
                 isOn: Binding {
-                    FileManager.default.ubiquityIdentityToken == nil ||
-                    isICloudDisabled
+                    ICloudContainerConfiguration.current.isCloudSyncDisabled(
+                        userPreference: isICloudDisabled,
+                        hasICloudAccount: FileManager.default.ubiquityIdentityToken != nil
+                    )
                 } set: { disabled in
+                    guard ICloudContainerConfiguration.current.isCloudKitEnabled else { return }
                     isICloudDisabled = disabled
                 }
             )
+            .disabled(!ICloudContainerConfiguration.current.isCloudKitEnabled)
             .modifier(ToggleICloudSyncingModifier())
         } header: {
             Text(localizable: .settingsICloudTitle)

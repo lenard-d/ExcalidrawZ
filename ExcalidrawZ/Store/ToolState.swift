@@ -73,7 +73,7 @@ enum ExcalidrawTool: Int, Hashable, CaseIterable {
             case .hand:
                 self = .hand
             case .lasso:
-                self = .cursor
+                self = .lasso
         }
     }
     
@@ -187,12 +187,7 @@ enum ExcalidrawTool: Int, Hashable, CaseIterable {
     }
 
     var supportsOrderedNumericShortcut: Bool {
-        switch self {
-            case .lasso:
-                false
-            default:
-                true
-        }
+        true
     }
     
     var localization: String {
@@ -385,7 +380,7 @@ enum ExcalidrawTool: Int, Hashable, CaseIterable {
 
 final class ToolState: ObservableObject {
     let logger = Logger(label: "ToolState")
-    var excalidrawWebCoordinator: ExcalidrawCanvasView.Coordinator?
+    @Published var excalidrawWebCoordinator: ExcalidrawCanvasView.Coordinator?
 
     @Published var activatedTool: ExcalidrawTool? = .cursor
     @Published var isToolLocked: Bool = false

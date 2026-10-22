@@ -14,75 +14,53 @@ struct PresentationWelcomeView: View {
     let onUpgrade: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 28)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                hero
 
-            hero
-                .padding(.horizontal, 20)
-                .padding(.bottom, 24)
+                VStack(alignment: .leading, spacing: 10) {
+                    Button(action: onUpgrade) {
+                        Text(localizable: .presentationWelcomeButton)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .modernButtonStyle(
+                        style: .glassProminent,
+                        size: .extraLarge,
+                        shape: .modern
+                    )
+                    .accessibilityIdentifier("presentationWelcomePrimaryAction")
 
-            Button(action: onUpgrade) {
-                Text(localizable: .presentationWelcomeButton)
-                    .frame(maxWidth: .infinity)
+                    Text(localizable: .presentationWelcomeButtonCaption)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("presentationWelcomePlanCaption")
+                }
             }
-            .modernButtonStyle(
-                style: .glassProminent,
-                size: .extraLarge,
-                shape: .modern
-            )
-            .padding(.horizontal, 20)
-
-            Text(localizable: .presentationWelcomeButtonCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-                .padding(.top, 8)
-
-            Spacer(minLength: 28)
+            .frame(maxWidth: 420, alignment: .leading)
+            .padding(20)
+            .frame(maxWidth: .infinity)
         }
-        .background {
-            background
-        }
+        .accessibilityIdentifier("presentationWelcomeScrollView")
     }
 
     private var hero: some View {
-        VStack(spacing: 14) {
-            Image(systemSymbol: .rectangleStack)
-                .font(.system(size: 30, weight: .medium))
-                .foregroundStyle(.tint)
-                .frame(width: 64, height: 64)
-                .background(.tint.opacity(0.12), in: Circle())
-
-            VStack(spacing: 7) {
-                Text(localizable: .presentationWelcomeCaption)
-                    .font(.caption.weight(.semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemSymbol: .rectangleStack)
+                    .font(.title.weight(.medium))
+                    .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
 
                 Text(localizable: .presentationWelcomeTitle)
                     .font(.title2.weight(.semibold))
-                    .multilineTextAlignment(.center)
-
-                Text(localizable: .presentationWelcomeMessage)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
-        }
-    }
 
-    private var background: some View {
-        LinearGradient(
-            colors: [
-                Color.accentColor.opacity(0.12),
-                Color.clear,
-                Color.pink.opacity(0.08)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
+            Text(localizable: .presentationWelcomeMessage)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

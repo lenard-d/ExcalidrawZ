@@ -1,0 +1,172 @@
+diff --git a/excalidraw-app/excalidrawZ/index.js b/excalidraw-app/excalidrawZ/index.js
+--- a/excalidraw-app/excalidrawZ/index.js
++++ b/excalidraw-app/excalidrawZ/index.js
+@@ -214,6 +214,16 @@
+ let lastAppStateSignature = null;
+ let watchStateSuppressionDepth = 0;
+ let watchStateSuppressionGeneration = 0;
++let pendingContentCompletionRevision = null;
++let publishedContentCompletionRevision = null;
++
++// Coalesce finalized edits without changing the ordinary notification cadence.
++const CONTENT_COMPLETION_QUIET_MS = 1000;
++
++const isContentEditing = (state) =>
++  state.isLoading || state.cursorButton === "down" || state.newElement != null ||
++  state.multiElement != null || state.editingTextElement != null ||
++  state.resizingElement != null || state.isResizing || state.isRotating;
+
+ const getPerformanceNow = () =>
+   typeof performance !== "undefined" && typeof performance.now === "function"
+@@ -284,10 +294,14 @@
+     api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements?.() ?? [];
+   const appState = api.getAppState?.() ?? {};
+   setWatchStateSignatures(elements, appState);
++  pendingContentCompletionRevision = null;
++  publishedContentCompletionRevision = null;
+   return true;
+ };
+
+ const beginStateChangeSuppression = () => {
++  pendingContentCompletionRevision = null;
++  publishedContentCompletionRevision = null;
+   watchStateSuppressionDepth += 1;
+   watchStateSuppressionGeneration += 1;
+
+@@ -318,8 +332,12 @@
+   lastContentSignature = contentSignature;
+   lastAppStateSignature = appStateSignature;
+
++  const revision = getNextStateRevision();
++  if (contentDirty) {
++    pendingContentCompletionRevision = revision;
++  }
+   return {
+-    revision: getNextStateRevision(),
++    revision,
+     changedAt: Date.now(),
+     dirty: true,
+     contentDirty,
+@@ -366,7 +384,7 @@
+
+   resetWatchStateBaseline();
+
+-  const dispatch = throttle((elements, appState, suppressionGeneration) => {
++  const publish = ({ elements, appState, suppressionGeneration, completed = false }) => {
+     try {
+       if (
+         isLocalViewer() ||
+@@ -380,19 +398,43 @@
+       const totalStartedAt = getPerformanceNow();
+
+       const payloadStartedAt = getPerformanceNow();
+-      const payload = createStateChangedPayload(elements, appState);
++      const previousContentSignature = lastContentSignature;
++      const previousAppStateSignature = lastAppStateSignature;
++      let payload = createStateChangedPayload(elements, appState);
++      if (completed && pendingContentCompletionRevision != null) {
++        payload = {
++          revision: watchStateRevision,
++          dirty: false,
++          contentDirty: false,
++          appStateDirty: false,
++          currentFileId: window.excalidrawZHelper?.currentFileId ?? null,
++          ...payload,
++          completedContentRevision: pendingContentCompletionRevision,
++        };
++      }
++      if (payload) {
++        payload.contentInteractionActive = Boolean(isContentEditing(appState));
++      }
+       const payloadMs = getPerformanceNow() - payloadStartedAt;
+       if (!payload) {
+         return;
+       }
+
+       const sendStartedAt = getPerformanceNow();
+-      sendMessage({
++      const sent = sendMessage({
+         event: "onStateChanged",
+         data: {
+           data: payload,
+         },
+       });
++      if (!sent) {
++        lastContentSignature = previousContentSignature;
++        lastAppStateSignature = previousAppStateSignature;
++      }
++      if (sent && payload.completedContentRevision != null) {
++        publishedContentCompletionRevision = payload.completedContentRevision;
++        pendingContentCompletionRevision = null;
++      }
+       const sendMessageMs = getPerformanceNow() - sendStartedAt;
+       const totalMs = getPerformanceNow() - totalStartedAt;
+
+@@ -413,15 +455,66 @@
+     } catch (error) {
+       console.error("[watchExcalidrawState]", error);
+     }
++  };
++  const dispatch = throttle((elements, appState, suppressionGeneration) => {
++    publish({ elements, appState, suppressionGeneration });
+   }, 1000);
++  let completionTimer = null;
+
+   api.onChange((elements, appState) => {
++    clearTimeout(completionTimer);
++    completionTimer = null;
+     if (isLocalViewer() || watchStateSuppressionDepth > 0) {
+       return;
+     }
+
+-    dispatch(elements, appState, watchStateSuppressionGeneration);
++    const suppressionGeneration = watchStateSuppressionGeneration;
++    const fileID = window.excalidrawZHelper?.currentFileId;
++    if (isContentEditing(appState) && publishedContentCompletionRevision != null) {
++      // Withdraw an already-posted hint without scanning the scene or creating dirty intent.
++      const sent = sendMessage({
++        event: "onStateChanged",
++        data: { data: {
++          revision: watchStateRevision,
++          dirty: false, contentDirty: false, appStateDirty: false,
++          contentInteractionActive: true, currentFileId: fileID,
++        } },
++      });
++      if (sent) {
++        pendingContentCompletionRevision = Math.max(
++          pendingContentCompletionRevision ?? publishedContentCompletionRevision,
++          publishedContentCompletionRevision,
++        );
++        publishedContentCompletionRevision = null;
++      }
++    }
++    dispatch(elements, appState, suppressionGeneration);
++    if (isContentEditing(appState)) {
++      return;
++    }
++    // Only a quiet post-update scene can request an earlier pending snapshot.
++    // Reading the interaction state here does not scan or serialize the scene per move.
++    completionTimer = setTimeout(() => {
++      completionTimer = null;
++      if (watchStateSuppressionDepth > 0 ||
++          suppressionGeneration !== watchStateSuppressionGeneration ||
++          window.excalidrawZHelper?._api !== api ||
++          window.excalidrawZHelper?.currentFileId !== fileID || isLocalViewer()) {
++        return;
++      }
++      const currentState = api.getAppState();
++      if (isContentEditing(currentState)) {
++        return;
++      }
++      const currentElements = api.getSceneElementsIncludingDeleted();
++      publish({
++        elements: currentElements,
++        appState: currentState,
++        suppressionGeneration,
++        completed: true,
++      });
++    }, CONTENT_COMPLETION_QUIET_MS);
+   });
+ };
+
+ const hideEls = () => {

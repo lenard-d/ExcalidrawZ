@@ -72,11 +72,9 @@ struct TemporaryGroupMenuItems: View {
         Divider()
         
         Button {
-            let temporaryFiles = fileState.temporaryFiles
-            fileState.setActiveFile(nil)
-            fileState.temporaryFiles.removeAll()
-            fileState.currentActiveGroup = nil
-            deleteAIConversations(for: temporaryFiles)
+            Task {
+                await TemporaryFileActions.close(Set(fileState.temporaryFiles), fileState: fileState)
+            }
         } label: {
             Label(.localizable(.sidebarTemporaryGroupRowContextMenuCloseAll), systemSymbol: .xmarkCircle)
         }

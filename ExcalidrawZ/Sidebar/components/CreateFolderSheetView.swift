@@ -86,9 +86,16 @@ struct CreateFolderModifier: ViewModifier {
                     )
                 }
                 
-                try parentFolder.refreshChildren(context: context)
-                localFolderState.objectWillChange.send()
-                localFolderState.refreshFilesPublisher.send()
+                let folderID = parentFolder.objectID
+                Task { @MainActor in
+                    do {
+                        try await LocalFolder.refreshChildrenOffMain(folderID: folderID, context: context)
+                        localFolderState.objectWillChange.send()
+                        localFolderState.refreshFilesPublisher.send()
+                    } catch {
+                        alertToast(error)
+                    }
+                }
             } catch {
                 alertToast(error)
             }

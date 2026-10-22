@@ -103,6 +103,10 @@ extension MediaItem {
             return (mediaItem.filePath, mediaItem.id, mediaItem.dataURL)
         }
 
+        return try await Self.loadDataURL(filePath: filePath, mediaID: mediaID, fallbackDataURL: dataURL)
+    }
+
+    static func loadDataURL(filePath: String?, mediaID: String?, fallbackDataURL: String?) async throws -> String {
         // Try to load from storage first (local/iCloud with bidirectional sync)
         if let filePath = filePath, let mediaID = mediaID {
             do {
@@ -116,7 +120,7 @@ extension MediaItem {
         }
 
         // Fallback to CoreData dataURL
-        if let dataURL = dataURL {
+        if let dataURL = fallbackDataURL {
             return dataURL
         }
 

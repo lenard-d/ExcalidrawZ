@@ -85,6 +85,19 @@ private enum ExcalidrawToolbarLayoutBreakpoints {
 
 enum ExcalidrawToolbarLayoutPolicy {
 #if os(iOS)
+    static func usesNativeIPadControls(
+        isPad: Bool,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        containerWidth: CGFloat,
+        isNormalEditor: Bool = true,
+        isInteractionEnabled: Bool = true
+    ) -> Bool {
+        isPad && isNormalEditor && isInteractionEnabled && containerWidth > 0 && !usesCompactIOSBottomToolbar(
+            horizontalSizeClass: horizontalSizeClass,
+            containerWidth: containerWidth
+        )
+    }
+
     static func usesCompactIOSBottomToolbar(
         horizontalSizeClass: UserInterfaceSizeClass?,
         containerWidth: CGFloat

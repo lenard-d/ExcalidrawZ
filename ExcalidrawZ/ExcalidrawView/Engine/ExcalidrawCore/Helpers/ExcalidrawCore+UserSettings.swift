@@ -19,11 +19,14 @@ extension ExcalidrawCore {
     }
 
     /// Push an explicit `UserDrawingSettings` struct to the current canvas.
-    /// Excalidraw merges these into appState, so partial structs (Optional fields nil)
-    /// only update the populated keys.
+    /// Fill missing fields from global preferences, then UI defaults, because the
+    /// web receiver resets omitted fields. Explicit values, including null, are kept.
     @MainActor
     func applyUserSettings(_ settings: UserDrawingSettings) async throws {
-        guard let jsonString = settings.toJSONString() else {
+        let effectiveSettings = settings
+            .filling(defaults: parent?.appPreference.customDrawingSettings ?? .uiDefaults)
+            .filling(defaults: .uiDefaults)
+        guard let jsonString = effectiveSettings.toJSONString() else {
             logger.error("Failed to convert settings to JSON string")
             return
         }

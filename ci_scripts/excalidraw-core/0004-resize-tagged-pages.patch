@@ -1,0 +1,229 @@
+diff --git a/packages/element/src/resizeElements.ts b/packages/element/src/resizeElements.ts
+index 5e0e56b..1504178 100644
+--- a/packages/element/src/resizeElements.ts
++++ b/packages/element/src/resizeElements.ts
+@@ -63,6 +63,7 @@ import {
+ } from "./typeChecks";
+ 
+ import { isInGroup } from "./groups";
++import { resizeTaggedPageGuides } from "./taggedPage";
+ import {
+   getStickyNoteMinSize,
+   getStickyNoteResizeIntent,
+@@ -955,6 +956,17 @@ export const resizeSingleElement = (
+       }
+     }
+ 
++    resizeTaggedPageGuides({
++      page: latestElement,
++      bounds: {
++        ...newOrigin,
++        width: Math.abs(nextWidth),
++        height: Math.abs(nextHeight),
++      },
++      originalElements: originalElementsMap,
++      scene,
++    });
++
+     scene.mutateElement(latestElement, updates, {
+       informMutation: shouldInformMutation,
+       isDragging: false,
+diff --git a/packages/element/src/transformHandles.ts b/packages/element/src/transformHandles.ts
+index 7ef5684..09da400 100644
+--- a/packages/element/src/transformHandles.ts
++++ b/packages/element/src/transformHandles.ts
+@@ -14,6 +14,7 @@ import type {
+ import type { Bounds } from "@excalidraw/common";
+ 
+ import { getElementAbsoluteCoords } from "./bounds";
++import { isTaggedPage } from "./taggedPage";
+ import {
+   isElbowArrow,
+   isFrameLikeElement,
+@@ -306,6 +307,9 @@ export const getTransformHandles = (
+   } else if (isFrameLikeElement(element)) {
+     omitSides = {
+       ...omitSides,
++      ...(isTaggedPage(element)
++        ? { n: false, s: false, e: false, w: false }
++        : {}),
+       rotation: true,
+     };
+   }
+diff --git a/packages/element/src/frame.ts b/packages/element/src/frame.ts
+index d74c99e..99fa7ae 100644
+--- a/packages/element/src/frame.ts
++++ b/packages/element/src/frame.ts
+@@ -38,6 +38,8 @@ import {
+   isTextElement,
+ } from "./typeChecks";
+ 
++import { isTaggedPageGuide } from "./taggedPage";
++
+ import { getNonDeletedElements } from ".";
+ 
+ import type { ExcalidrawElementsIncludingDeleted } from "./Scene";
+@@ -398,6 +400,12 @@ export const getElementsInResizingFrame = (
+     }
+   }
+ 
++  // Locked paper lines are not selectable geometry, but remain part of their page.
++  for (const element of prevElementsInFrame) {
++    if (isTaggedPageGuide(element, frame)) {
++      nextElementsInFrame.add(element);
++    }
++  }
+   return [...nextElementsInFrame].filter((element) => {
+     return !(isTextElement(element) && element.containerId);
+   });
+diff --git a/packages/element/src/taggedPage.ts b/packages/element/src/taggedPage.ts
+new file mode 100644
+index 0000000..f5fb6e1
+--- /dev/null
++++ b/packages/element/src/taggedPage.ts
+@@ -0,0 +1,121 @@
++import { pointFrom, type LocalPoint } from "@excalidraw/math";
++
++import type { Scene } from "./Scene";
++import type {
++  ExcalidrawElement,
++  ExcalidrawFrameElement,
++  ExcalidrawLinearElement,
++} from "./types";
++
++const hasPageVersion = (value: unknown): boolean =>
++  typeof value === "object" &&
++  value !== null &&
++  "version" in value &&
++  value.version === 1;
++
++export const isTaggedPage = (
++  element: ExcalidrawElement,
++): element is ExcalidrawFrameElement =>
++  element.type === "frame" &&
++  hasPageVersion(element.customData?.excalidrawZPage);
++
++export const isTaggedPageGuide = (
++  element: ExcalidrawElement,
++  page: ExcalidrawElement,
++): element is ExcalidrawLinearElement =>
++  isTaggedPage(page) &&
++  page.angle === 0 &&
++  element.type === "line" &&
++  !element.isDeleted &&
++  element.frameId === page.id &&
++  element.locked &&
++  element.angle === 0 &&
++  !element.boundElements?.length &&
++  !element.startBinding &&
++  !element.endBinding &&
++  hasPageVersion(element.customData?.excalidrawZPageGuide) &&
++  element.points.length === 2 &&
++  element.points[0][0] === 0 &&
++  element.points[0][1] === 0 &&
++  ((element.points[1][1] === 0 && element.points[1][0] > 0) ||
++    (element.points[1][0] === 0 && element.points[1][1] > 0));
++
++/** Resize the generated paper, leaving the frame's ink at its native size. */
++export const resizeTaggedPageGuides = ({
++  page,
++  bounds,
++  originalElements,
++  scene,
++}: {
++  page: ExcalidrawElement;
++  bounds: Pick<ExcalidrawElement, "x" | "y" | "width" | "height">;
++  originalElements: ReadonlyMap<string, ExcalidrawElement>;
++  scene: Scene;
++}): void => {
++  if (
++    !isTaggedPage(page) ||
++    page.angle !== 0 ||
++    !Object.values(bounds).every(Number.isFinite) ||
++    bounds.width <= 0 ||
++    bounds.height <= 0
++  ) {
++    return;
++  }
++  const horizontal: ExcalidrawLinearElement[] = [];
++  const vertical: ExcalidrawLinearElement[] = [];
++  for (const element of originalElements.values()) {
++    if (!isTaggedPageGuide(element, page)) {
++      continue;
++    }
++    const [, end] = element.points;
++    if (end[1] === 0 && end[0] > 0) {
++      horizontal.push(element);
++    } else if (end[0] === 0 && end[1] > 0) {
++      vertical.push(element);
++    }
++  }
++  horizontal.sort((a, b) => a.y - b.y);
++  vertical.sort((a, b) => a.x - b.x);
++  const live = scene.getNonDeletedElementsMap();
++  // A fixed line count keeps paper spacing proportional and repairs older partial paper.
++  horizontal.forEach((original, index) => {
++    const line = live.get(original.id);
++    if (!line || !isTaggedPageGuide(line, page)) {
++      return;
++    }
++    scene.mutateElement(
++      line,
++      {
++        x: bounds.x,
++        y: bounds.y + (bounds.height * (index + 1)) / (horizontal.length + 1),
++        width: bounds.width,
++        height: 0,
++        points: [
++          pointFrom<LocalPoint>(0, 0),
++          pointFrom<LocalPoint>(bounds.width, 0),
++        ],
++      },
++      { informMutation: false, isDragging: false },
++    );
++  });
++  vertical.forEach((original, index) => {
++    const line = live.get(original.id);
++    if (!line || !isTaggedPageGuide(line, page)) {
++      return;
++    }
++    scene.mutateElement(
++      line,
++      {
++        x: bounds.x + (bounds.width * (index + 1)) / (vertical.length + 1),
++        y: bounds.y,
++        width: 0,
++        height: bounds.height,
++        points: [
++          pointFrom<LocalPoint>(0, 0),
++          pointFrom<LocalPoint>(0, bounds.height),
++        ],
++      },
++      { informMutation: false, isDragging: false },
++    );
++  });
++};
+diff --git a/packages/excalidraw/components/App.selectionTool.ts b/packages/excalidraw/components/App.selectionTool.ts
+index dbc67f3..0c9bdfe 100644
+--- a/packages/excalidraw/components/App.selectionTool.ts
++++ b/packages/excalidraw/components/App.selectionTool.ts
+@@ -58,6 +58,8 @@ import {
+   vectorSubtract,
+ } from "@excalidraw/math";
+ 
++import { isTaggedPage } from "@excalidraw/element/taggedPage";
++
+ import type { TransformHandleType } from "@excalidraw/element";
+ import type {
+   ExcalidrawElement,
+@@ -681,6 +683,10 @@ export class AppSelectionTool {
+     // edges stay free by default — Shift constrains them like any shape.
+     const proportionalByDefault =
+       selectedElements.some((element) => isImageElement(element)) ||
++      (selectedElements.length === 1 &&
++        isTaggedPage(selectedElements[0]) &&
++        typeof transformHandleType === "string" &&
++        transformHandleType.length === 2) ||
+       (selectedElements.length === 1 &&
+         isStickyNoteElement(selectedElements[0]) &&
+         typeof transformHandleType === "string" &&

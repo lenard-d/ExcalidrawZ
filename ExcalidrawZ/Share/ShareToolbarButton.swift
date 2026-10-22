@@ -34,6 +34,8 @@ class ShareFileState: ObservableObject {
 }
 
 struct ShareToolbarButton: View {
+    var usesNativeIPadControlSize = false
+
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.alertToast) private var alertToast
     
@@ -135,7 +137,14 @@ struct ShareToolbarButton: View {
             }
             
         } label: {
-            Label(.localizable(.export), systemSymbol: .squareAndArrowUp)
+            if usesNativeIPadControlSize {
+                Label(.localizable(.export), systemSymbol: .squareAndArrowUp)
+                    .labelStyle(.iconOnly)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            } else {
+                Label(.localizable(.export), systemSymbol: .squareAndArrowUp)
+            }
         }
         .disabled(isShareDisabled)
         .activitySheet(item: $exportedPDFURL)

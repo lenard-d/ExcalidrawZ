@@ -1,0 +1,36 @@
+diff --git a/excalidraw-app/index.scss b/excalidraw-app/index.scss
+index ac06070..21a73da 100644
+--- a/excalidraw-app/index.scss
++++ b/excalidraw-app/index.scss
+@@ -169 +169,10 @@ html.excalidrawz-transparent-canvas {
+ }
++
++// SwiftUI supplies these controls only in the full-width native iPad editor.
++html.excalidrawz-native-ipad-controls .excalidraw {
++  .layer-ui__wrapper__footer-left .zoom-actions,
++  .layer-ui__wrapper__footer-left .undo-redo-buttons,
++  .App-menu_top__left > .ToolIcon__penMode {
++    display: none !important;
++  }
++}
+diff --git a/excalidraw-app/excalidrawZ/interaction.js b/excalidraw-app/excalidrawZ/interaction.js
+index ad8ad77..585a8ed 100644
+--- a/excalidraw-app/excalidrawZ/interaction.js
++++ b/excalidraw-app/excalidrawZ/interaction.js
+@@ -226,14 +217,5 @@ document.addEventListener("touchend", () => {
+ export const toggleActionsMenu = (isPresented) => {
++  window.excalidrawZHelper.shouldHideActionsMenu = !isPresented;
+   const el = document.querySelector(".selected-shape-actions");
+-  if (!el) {
+-    return;
+-  }
+-  if (!isPresented && !el.classList.contains("transition-left")) {
+-    el.classList.add("transition-left");
+-  } else {
+-    el.classList.remove("transition-left");
+-  }
+-  setTimeout(() => {
+-    window.excalidrawZHelper.shouldHideActionsMenu = !isPresented;
+-  }, 200);
++  el?.classList.toggle("transition-left", !isPresented);
+ };

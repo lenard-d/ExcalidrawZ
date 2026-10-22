@@ -15,8 +15,19 @@ import ChocofordEssentials
 
 final class FileState: ObservableObject {
     let logger = Logger(label: "FileState")
+    let canvasSaveCoordinator = CanvasSaveCoordinator()
 
     private let openInPlaceAccessStore = OpenInPlaceAccessStore()
+
+    @MainActor var externalSaveSessionID = UUID()
+    @Published var externalSaveErrorMessage: String?
+    @MainActor var isApplyingExternalCanvasSnapshot = false
+    @MainActor var reportedExternalSaveFailures: Set<URL> = []
+
+    deinit {
+        let session = externalSaveSessionID
+        Task { await ExternalFileSaveCoordinator.shared.releaseSession(session) }
+    }
     
     var stateUpdateQueue: DispatchQueue = DispatchQueue(label: "StateUpdateQueue")
     
@@ -407,6 +418,9 @@ final class FileState: ObservableObject {
 
         let id: String
         let kind: Kind
+        var isOpenInPlace = false
+        var externalWriter: ExternalFileSaveCoordinator.Writer?
+        var saveSessionID: UUID?
     }
     
     @Published private(set) var activeFileIndex: Int? = 0
@@ -447,6 +461,7 @@ final class FileState: ObservableObject {
 
     @MainActor
     private func applyActiveFile(_ newValue: ActiveFile?) {
+        canvasSaveCoordinator.invalidate()
         let previousActiveFile = currentActiveFile
         let previousConversationScope = previousActiveFile?.aiConversationFileScope
         let nextConversationScope = newValue?.aiConversationFileScope
@@ -603,7 +618,7 @@ final class FileState: ObservableObject {
     }
 
     @MainActor
-    private func capturedCanvasSaveTarget(for activeFile: ActiveFile) -> CapturedCanvasSaveTarget? {
+    func capturedCanvasSaveTarget(for activeFile: ActiveFile) -> CapturedCanvasSaveTarget? {
         switch activeFile {
             case .file(let file):
                 guard !file.inTrash else { return nil }
@@ -622,6 +637,8 @@ final class FileState: ObservableObject {
 
             case .localFile(let url), .temporaryFile(let url):
                 let suppressCheckpoint = automaticCheckpointWritesSuppressed
+                let isOpenInPlace: Bool
+                if case .temporaryFile = activeFile { isOpenInPlace = true } else { isOpenInPlace = false }
                 return CapturedCanvasSaveTarget(
                     id: activeFile.id,
                     kind: .localFile(
@@ -630,7 +647,10 @@ final class FileState: ObservableObject {
                             ? false
                             : shouldCreateUserCheckpoint(for: activeFile),
                         suppressCheckpoint: suppressCheckpoint
-                    )
+                    ),
+                    isOpenInPlace: isOpenInPlace,
+                    externalWriter: isOpenInPlace ? openInPlaceAccessStore.writer(for: url) : nil,
+                    saveSessionID: externalSaveSessionID
                 )
 
             case .collaborationFile(let file):
@@ -659,7 +679,7 @@ final class FileState: ObservableObject {
     }
 
     @MainActor
-    private func canvasCoordinator(for activeFile: ActiveFile) -> ExcalidrawCanvasView.Coordinator? {
+    func canvasCoordinator(for activeFile: ActiveFile) -> ExcalidrawCanvasView.Coordinator? {
         if case .collaborationFile = activeFile {
             return excalidrawCollaborationWebCoordinator
         }
@@ -700,30 +720,57 @@ final class FileState: ObservableObject {
         if let previousFile,
            let saveTarget = capturedCanvasSaveTarget(for: previousFile) {
             let coordinator = canvasCoordinator(for: previousFile)
-            if file == nil {
+            if case .localFile(let url, _, _) = saveTarget.kind {
                 isFinalizingActiveFileClose = true
-                defer {
-                    isFinalizingActiveFileClose = false
-                }
-
+                await FileCoverCacheCoordinator.shared.cacheCurrentViewportPreview(for: previousFile)
                 await coordinator?.documentSyncController.flushPendingDirtySnapshotToCapturedTarget(
-                    reason: "activeFileClose",
+                    reason: "externalFileWillChange",
                     expectedFileID: previousFile.id,
                     target: saveTarget,
                     forceCurrentAppState: true
                 )
-                await FileCoverCacheCoordinator.shared.cacheCurrentViewportPreview(
-                    for: previousFile
-                )
+                do {
+                    try await ExternalFileSaveCoordinator.shared.retry(
+                        at: url, session: saveTarget.saveSessionID, writer: Self.externalFileWriter(for: saveTarget)
+                    )
+                } catch {
+                    reportExternalSaveFailure(error, at: url, force: true)
+                }
+                isFinalizingActiveFileClose = false
+                guard !Task.isCancelled else { return false }
+                let validatedRevision = coordinator?.documentSyncController.externalReloadRevision
+                let pending = await ExternalFileSaveCoordinator.shared.pendingContent(at: url, session: saveTarget.saveSessionID)
+                guard currentActiveFile == previousFile, externalSaveSessionID == saveTarget.saveSessionID,
+                      coordinator?.documentSyncController.externalReloadRevision == validatedRevision else { return false }
+                if pending != nil
+                    || coordinator?.documentSyncController.hasPendingDirtySnapshot == true {
+                    reportExternalSaveFailure(CocoaError(.fileWriteUnknown), at: url, force: true)
+                    return false
+                }
             } else {
-                await FileCoverCacheCoordinator.shared.cacheCurrentViewportPreview(
-                    for: previousFile
-                )
-                await coordinator?.documentSyncController.flushPendingDirtySnapshotInBackground(
-                    reason: "activeFileWillChange",
-                    expectedFileID: previousFile.id,
-                    target: saveTarget
-                )
+                isFinalizingActiveFileClose = true
+                await FileCoverCacheCoordinator.shared.cacheCurrentViewportPreview(for: previousFile)
+                let owner = coordinator?.documentSyncController.captureCanvasMutationSession()
+                let canLeave: Bool
+                if let owner {
+                    canLeave = await CanvasSaveTransition.prepare(
+                        owner: owner,
+                        currentOwner: { coordinator?.documentSyncController.captureCanvasMutationSession() },
+                        flush: {
+                            await coordinator?.documentSyncController.flushPendingDirtySnapshotToCapturedTarget(
+                                reason: "activeFileWillChange",
+                                expectedFileID: previousFile.id,
+                                target: saveTarget,
+                                forceCurrentAppState: true
+                            )
+                        },
+                        hasPendingSave: { coordinator?.documentSyncController.hasPendingDirtySnapshot == true }
+                    )
+                } else {
+                    canLeave = coordinator?.documentSyncController.hasPendingDirtySnapshot != true
+                }
+                isFinalizingActiveFileClose = false
+                guard canLeave, !Task.isCancelled, currentActiveFile == previousFile else { return false }
             }
         }
 
@@ -740,7 +787,9 @@ final class FileState: ObservableObject {
         if file == nil, let previousFile {
             pendingActiveFileCloseTransitionIDs.insert(previousFile.canonicalID)
         }
+        let previousSaveSession = externalSaveSessionID
         applyActiveFile(file)
+        Task { await ExternalFileSaveCoordinator.shared.releaseSession(previousSaveSession) }
 
         guard let file else {
             return true
@@ -1193,7 +1242,7 @@ final class FileState: ObservableObject {
         return true
     }
 
-    private func shouldAcceptCanvasUpdate(
+    func shouldAcceptCanvasUpdate(
         fileID: String,
         label: String
     ) -> Bool {
@@ -1310,56 +1359,16 @@ final class FileState: ObservableObject {
         return fileID
     }
     
-    @discardableResult
     @MainActor
-    func persistPreparedLibraryCanvasUpdate(
-        _ file: File,
-        with excalidrawFile: ExcalidrawFile
-    ) -> Bool {
+    func prepareLibraryCanvasSaveTarget(_ file: File) -> CapturedCanvasSaveTarget? {
         let activeFile = ActiveFile.file(file)
         guard !file.inTrash,
-              shouldAcceptCanvasUpdate(fileID: activeFile.id, label: file.name ?? "Untitled") else {
-            return false
+              shouldAcceptCanvasUpdate(fileID: activeFile.id, label: file.name ?? "Untitled"),
+              let target = capturedCanvasSaveTarget(for: activeFile) else {
+            return nil
         }
-        let id = file.objectID
-        let suppressCheckpoint = automaticCheckpointWritesSuppressed
-        let newCheckpoint = suppressCheckpoint
-            ? false
-            : shouldCreateUserCheckpoint(for: activeFile)
-        self.didUpdateFileState[activeFile] = true
-        Task.detached {
-            do {
-                guard let content = excalidrawFile.content else { return }
-                
-                // Step 1: Sync media items from ExcalidrawFile (creates new ones and saves to iCloud Drive)
-                _ = try await PersistenceController.shared.mediaItemRepository.syncMediaItemsForFile(
-                    excalidrawFile: excalidrawFile,
-                    fileObjectID: id
-                )
-                
-                // Step 2: Update file elements through repository.
-                // Checkpoint policy: suppress entirely while an AI/MCP
-                // mutation session is active (so automated mutations don't
-                // pollute user history); otherwise fall back to historical
-                // user-edit semantics.
-                let checkpointPolicy: CheckpointWriteOptions = suppressCheckpoint
-                    ? .suppress
-                    : .userEdit(newCheckpoint: newCheckpoint)
-                try await PersistenceController.shared.fileRepository.updateElements(
-                    fileObjectID: id,
-                    fileData: content,
-                    checkpoint: checkpointPolicy
-                )
-                self.logger.debug("File update saved")
-                await MainActor.run {
-                    // already throttled
-                    self.objectWillChange.send()
-                }
-            } catch {
-                self.logger.error("Failed to update file \(file.name ?? "Untitled"): \(error)")
-            }
-        }
-        return true
+        didUpdateFileState[activeFile] = true
+        return target
     }
 
     @MainActor
@@ -1385,27 +1394,27 @@ final class FileState: ObservableObject {
 
     static func saveCapturedCanvasUpdate(
         _ target: CapturedCanvasSaveTarget,
-        with excalidrawFile: ExcalidrawFile
-    ) async {
-        let logger = Logger(label: "FileState")
-        do {
-            try await persistCapturedCanvasUpdate(
-                target,
-                with: excalidrawFile,
-                logger: logger
-            )
-        } catch {
-            logger.error("Failed to update background captured file \(target.id): \(error)")
+        with excalidrawFile: ExcalidrawFile,
+        capture: CanvasSaveCapture? = nil
+    ) async throws {
+        if let capture {
+            try await capture.performSave {
+                try await persistCapturedCanvasUpdate(target, with: excalidrawFile, capture: capture)
+            }
+        } else {
+            try await persistCapturedCanvasUpdate(target, with: excalidrawFile)
         }
     }
 
     static func persistCapturedCanvasUpdate(
         _ target: CapturedCanvasSaveTarget,
-        with excalidrawFile: ExcalidrawFile
+        with excalidrawFile: ExcalidrawFile,
+        capture: CanvasSaveCapture? = nil
     ) async throws {
         try await persistCapturedCanvasUpdate(
             target,
             with: excalidrawFile,
+            capture: capture,
             logger: Logger(label: "FileState")
         )
     }
@@ -1413,6 +1422,7 @@ final class FileState: ObservableObject {
     private static func persistCapturedCanvasUpdate(
         _ target: CapturedCanvasSaveTarget,
         with excalidrawFile: ExcalidrawFile,
+        capture: CanvasSaveCapture?,
         logger: Logger
     ) async throws {
         switch target.kind {
@@ -1431,7 +1441,8 @@ final class FileState: ObservableObject {
                 try await PersistenceController.shared.fileRepository.updateElements(
                     fileObjectID: fileObjectID,
                     fileData: content,
-                    checkpoint: checkpointPolicy
+                    checkpoint: checkpointPolicy,
+                    capture: capture
                 )
                 logger.debug("Background captured file update saved: \(fileName)")
 
@@ -1439,6 +1450,9 @@ final class FileState: ObservableObject {
                 try await saveCapturedLocalCanvasUpdate(
                     to: url,
                     with: excalidrawFile,
+                    writer: externalFileWriter(for: target),
+                    session: target.saveSessionID,
+                    capture: capture,
                     newCheckpoint: newCheckpoint,
                     suppressCheckpoint: suppressCheckpoint,
                     logger: logger
@@ -1528,25 +1542,27 @@ final class FileState: ObservableObject {
 
     static func saveCapturedAppStateOnlyUpdate(
         _ target: CapturedCanvasSaveTarget,
-        content: Data
-    ) async {
+        content: Data,
+        capture: CanvasSaveCapture? = nil
+    ) async throws {
         let logger = Logger(label: "FileState")
         do {
             switch target.kind {
                 case .libraryFile(let objectURI, let fileName, _, _):
-                    guard let fileObjectID = managedObjectID(for: objectURI) else { return }
+                    guard let fileObjectID = managedObjectID(for: objectURI) else { throw AppError.fileError(.notFound) }
                     try await PersistenceController.shared.fileRepository.updateElements(
                         fileObjectID: fileObjectID,
                         fileData: content,
                         checkpoint: .suppress,
-                        updateMetadataWhenPathUnchanged: false
+                        updateMetadataWhenPathUnchanged: false,
+                        capture: capture
                     )
                     logger.debug("Background appState-only file update saved: \(fileName)")
 
                 case .localFile(let url, _, _):
-                    try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
-                        try await FileCoordinator.shared.coordinatedWrite(url: url, data: content)
-                    }
+                    try await ExternalFileSaveCoordinator.shared.saveAppState(
+                        from: content, to: url, session: target.saveSessionID, capture: capture, writer: externalFileWriter(for: target)
+                    )
                     logger.debug("Background appState-only local file update saved: \(url.lastPathComponent)")
 
                 case .collaborationFile:
@@ -1560,35 +1576,37 @@ final class FileState: ObservableObject {
             }
         } catch {
             logger.error("Failed to update background appState-only file \(target.id): \(error)")
+            throw error
         }
     }
 
-    private static func saveCapturedLocalCanvasUpdate(
+    static func saveCapturedLocalCanvasUpdate(
         to url: URL,
         with file: ExcalidrawFile,
+        writer: @escaping ExternalFileSaveCoordinator.Writer,
+        session: UUID?,
+        capture: CanvasSaveCapture? = nil,
         newCheckpoint: Bool,
         suppressCheckpoint: Bool,
         logger: Logger
     ) async throws {
         var file = file
         try file.updateContentFilesFromFiles()
-        guard let data = file.content else { return }
-
-        try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
-            try await FileCoordinator.shared.coordinatedWrite(url: url, data: data)
-            touchLocalFileModificationDate(url, logger: logger)
-        }
+        guard let data = file.content else { throw CocoaError(.fileWriteUnknown) }
+        try await ExternalFileSaveCoordinator.shared.save(
+            data, to: url, session: session, capture: capture, writer: writer
+        )
 
         guard !suppressCheckpoint else {
             logger.debug("Background captured local file update saved without checkpoint: \(url.lastPathComponent)")
             return
         }
 
-        try await LocalFileCheckpointStore.recordUserEdit(
-            content: data,
-            for: url,
-            newCheckpoint: newCheckpoint
-        )
+        do {
+            try await LocalFileCheckpointStore.recordUserEdit(content: data, for: url, newCheckpoint: newCheckpoint)
+        } catch {
+            logger.warning("File saved, but checkpoint failed: \(error.localizedDescription)")
+        }
 
         logger.debug("Background captured local file update saved: \(url.lastPathComponent)")
     }
@@ -1602,83 +1620,85 @@ final class FileState: ObservableObject {
     @MainActor
     func updateAppStateOnlyForCurrentFile(
         expectedFileID: String?,
-        content: Data
-    ) {
+        content: Data,
+        capture: CanvasSaveCapture? = nil
+    ) async throws {
         guard let activeFile = currentActiveFile,
               expectedFileID == nil || activeFile.id == expectedFileID else {
-            return
+            throw CancellationError()
         }
+        try capture?.withAdmission {}
 
         switch activeFile {
             case .file(let file):
-                guard !file.inTrash else { return }
-                let fileObjectID = file.objectID
-                let fileName = file.name ?? "Untitled"
-                Task.detached {
-                    do {
-                        try await PersistenceController.shared.fileRepository.updateElements(
-                            fileObjectID: fileObjectID,
-                            fileData: content,
-                            checkpoint: .suppress,
-                            updateMetadataWhenPathUnchanged: false
-                        )
-                        self.logger.debug("AppState-only file update saved")
-                    } catch {
-                        self.logger.error("Failed to update appState-only file \(fileName): \(error)")
-                    }
-                }
+                guard !file.inTrash else { throw CancellationError() }
+                try await PersistenceController.shared.fileRepository.updateElements(
+                    fileObjectID: file.objectID,
+                    fileData: content,
+                    checkpoint: .suppress,
+                    updateMetadataWhenPathUnchanged: false,
+                    capture: capture
+                )
 
             case .localFile(let url), .temporaryFile(let url):
-                Task.detached {
-                    do {
-                        try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
-                            try await FileCoordinator.shared.coordinatedWrite(url: url, data: content)
-                        }
-                        self.logger.debug("AppState-only local file update saved")
-                    } catch {
-                        self.logger.error("Failed to update appState-only local file \(url.lastPathComponent): \(error)")
-                    }
-                }
+                let isOpenInPlace: Bool
+                if case .temporaryFile = activeFile { isOpenInPlace = true } else { isOpenInPlace = false }
+                try await ExternalFileSaveCoordinator.shared.saveAppState(
+                    from: content, to: url, session: externalSaveSessionID, capture: capture, writer: isOpenInPlace ? (openInPlaceAccessStore.writer(for: url) ?? Self.externalFileWriter(isOpenInPlace: true)) : Self.externalFileWriter(isOpenInPlace: false)
+                )
 
             case .collaborationFile:
                 break
 
             case .cloudStorageFile(let reference):
-                Task {
-                    do {
-                        try await Self.stageCloudStorageUpload(content, for: reference)
-                        self.logger.debug("AppState-only cloud storage file update cached")
-                    } catch {
-                        self.logger.error(
-                            "Failed to update appState-only cloud storage file \(reference.lastKnownName): \(error)"
-                        )
-                    }
-                }
+                try await Self.stageCloudStorageUpload(content, for: reference)
+
         }
     }
 
     @MainActor
-    func flushPendingCanvasSnapshotBeforeTermination() async {
+    func flushPendingCanvasSnapshotBeforeTermination() async -> Bool {
         if let activeFile = currentActiveFile,
-           let saveTarget = capturedCanvasSaveTarget(for: activeFile),
-           let coordinator = canvasCoordinator(for: activeFile) {
-            await coordinator.documentSyncController.flushPendingDirtySnapshotToCapturedTarget(
+           let saveTarget = capturedCanvasSaveTarget(for: activeFile) {
+            let coordinator = canvasCoordinator(for: activeFile)
+            await coordinator?.documentSyncController.flushPendingDirtySnapshotToCapturedTarget(
                 reason: "applicationShouldTerminate",
                 expectedFileID: activeFile.id,
                 target: saveTarget,
                 forceCurrentAppState: true
             )
-            return
+            guard !Task.isCancelled else { return false }
+            if case .localFile(let url, _, _) = saveTarget.kind {
+                do {
+                    try await ExternalFileSaveCoordinator.shared.retry(
+                        at: url, session: saveTarget.saveSessionID, writer: Self.externalFileWriter(for: saveTarget)
+                    )
+                } catch {
+                    reportExternalSaveFailure(error, at: url, force: true)
+                    return false
+                }
+                let validatedRevision = coordinator?.documentSyncController.externalReloadRevision
+                let pending = await ExternalFileSaveCoordinator.shared.pendingContent(at: url, session: saveTarget.saveSessionID)
+                guard currentActiveFile == activeFile, externalSaveSessionID == saveTarget.saveSessionID,
+                      coordinator?.documentSyncController.externalReloadRevision == validatedRevision else { return false }
+                if pending != nil
+                    || coordinator?.documentSyncController.hasPendingDirtySnapshot == true {
+                    reportExternalSaveFailure(CocoaError(.fileWriteUnknown), at: url, force: true)
+                    return false
+                }
+            }
+            return !Task.isCancelled
         }
 
         await excalidrawWebCoordinator?.documentSyncController.flushPendingDirtySnapshot(
             reason: "applicationShouldTerminate",
             force: true
         )
+        return !Task.isCancelled
     }
 
     @MainActor
-    func flushPendingCanvasSnapshotBeforeExternalMutation(fileID: String) async {
+    func flushPendingCanvasSnapshotBeforeExternalMutation(fileID: String) async throws {
         guard let activeFile = currentActiveFile,
               activeFile.id == fileID,
               let saveTarget = capturedCanvasSaveTarget(for: activeFile),
@@ -1693,6 +1713,13 @@ final class FileState: ObservableObject {
                 target: saveTarget,
                 forceCurrentAppState: true
             )
+        try Task.checkCancellation()
+        if case .localFile(let url, _, _) = saveTarget.kind {
+            guard await ExternalFileSaveCoordinator.shared.pendingContent(at: url, session: saveTarget.saveSessionID) == nil,
+                  !coordinator.documentSyncController.hasPendingDirtySnapshot else {
+                throw ExternalFileSaveFailure(url: url, cause: CocoaError(.fileWriteUnknown))
+            }
+        }
     }
 
     @discardableResult
@@ -1723,50 +1750,9 @@ final class FileState: ObservableObject {
         return fileURL
     }
     
-    /// Remember to call `startAccessingSecurityScopedResource` before calling this function.
-    func updateLocalFile(to url: URL, with excalidrawFile: ExcalidrawFile, context: NSManagedObjectContext) async throws {
-        guard shouldAcceptCanvasUpdate(fileID: url.absoluteString, label: url.lastPathComponent) else { return }
-        var excalidrawFile = excalidrawFile
-        try excalidrawFile.updateContentFilesFromFiles()
-
-        guard let data = excalidrawFile.content else { return }
-        let savedThroughDocumentSession = try await openInPlaceAccessStore.save(data, to: url)
-        if !savedThroughDocumentSession {
-            // Linked Folder files retain a folder-scoped bookmark and continue
-            // to use coordinated URL access. Directly opened iOS documents are
-            // saved by their UIDocument session instead.
-            try await FileCoordinator.shared.coordinatedWrite(url: url, data: data)
-            Self.touchLocalFileModificationDate(url, logger: logger)
-        }
-
-        // Skip checkpoint writes entirely while an automated mutation session
-        // is active — file content still saves, history doesn't. Mirrors the
-        // database-file path's `.suppress` policy.
-        let suppressCheckpoint = await MainActor.run {
-            self.automaticCheckpointWritesSuppressed
-        }
-        if suppressCheckpoint {
-            await MainActor.run {
-                self.didUpdateFile = true
-                self.objectWillChange.send()
-            }
-            return
-        }
-
-        let newCheckpoint = await MainActor.run {
-            self.shouldCreateUserCheckpoint(for: .localFile(url))
-        }
-
-        try await LocalFileCheckpointStore.recordUserEdit(
-            content: data,
-            for: url,
-            newCheckpoint: newCheckpoint
-        )
-
-        await MainActor.run {
-            self.didUpdateFile = true
-            self.objectWillChange.send()
-        }
+    @MainActor
+    func updateLocalFile(to url: URL, with file: ExcalidrawFile, context: NSManagedObjectContext) async throws {
+        try await persistExternalCanvasUpdate(file, to: url)
     }
 
     static func touchLocalFileModificationDate(

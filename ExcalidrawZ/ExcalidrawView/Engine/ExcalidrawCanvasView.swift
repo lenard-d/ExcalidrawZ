@@ -10,6 +10,9 @@ import SwiftUI
 import ChocofordUI
 import Logging
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 
 
 struct ExcalidrawCanvasView: View {
@@ -25,6 +28,7 @@ struct ExcalidrawCanvasView: View {
     @Environment(\.excalidrawNativeViewportInsets) private var nativeViewportInsets
 #if os(iOS)
     @Environment(\.containerHorizontalSizeClass) private var containerHorizontalSizeClass
+    @Environment(\.containerSize) private var containerSize
 #endif
 
     let logger = Logger(label: "ExcalidrawCanvasView")
@@ -158,6 +162,7 @@ struct ExcalidrawCanvasView: View {
             .modifier(MediaItemSyncModifier())
             .modifier(MathImageEditSheetViewModifier(coordinator: excalidrawCore, onError: onError))
             .environmentObject(excalidrawCore)
+            .modifier(PageModeContextModifier(core: excalidrawCore, isEnabled: type == .normal && interactionEnabled))
 #if os(macOS)
             .onWindowEvent(.didBecomeKey) { _ in
                 applyColorMode()
@@ -197,6 +202,16 @@ struct ExcalidrawCanvasView: View {
 
     private var canvasWithSettings: some View {
         canvasWithDocumentUpdates
+#if os(iOS)
+            .watch(value: usesNativeIPadControls, initial: true) { _, _ in
+                applyNativeIPadControls()
+            }
+            .watch(value: toolState.activatedTool) { tool in
+                if tool == .freedraw && usesNativeIPadControls {
+                    applyNativeIPadControls()
+                }
+            }
+#endif
             .watch(value: colorScheme) { newValue in
                 applyColorMode(colorScheme: newValue)
             }
@@ -213,9 +228,49 @@ struct ExcalidrawCanvasView: View {
                 if state == .loaded {
                     applyAllSettings()
                     applyNativeViewportInsets()
+#if os(iOS)
+                    applyNativeIPadControls()
+#endif
                 }
             }
     }
+
+#if os(iOS)
+    private var usesNativeIPadControls: Bool {
+        ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
+            isPad: UIDevice.current.userInterfaceIdiom == .pad,
+            horizontalSizeClass: containerHorizontalSizeClass,
+            containerWidth: containerSize.width,
+            isNormalEditor: type == .normal,
+            isInteractionEnabled: interactionEnabled
+        )
+    }
+
+    private func applyNativeIPadControls() {
+        guard loadingState == .loaded else { return }
+        let enabled = usesNativeIPadControls
+        Task { @MainActor in
+            do {
+                _ = try await excalidrawCore.webView.callAsyncJavaScript(
+                    "document.documentElement.classList.toggle('excalidrawz-native-ipad-controls', enabled);",
+                    arguments: ["enabled": enabled],
+                    contentWorld: .page
+                )
+                if enabled {
+                    let isPenSelected = toolState.activatedTool == .freedraw
+                    try await excalidrawCore.toggleActionsMenu(
+                        isPresented: isPenSelected || toolState.isActionsMenuPresneted
+                    )
+                    if isPenSelected {
+                        toolState.isActionsMenuPresneted = true
+                    }
+                }
+            } catch {
+                onError(error)
+            }
+        }
+    }
+#endif
 
     // MARK: - Lifecycle Methods
 

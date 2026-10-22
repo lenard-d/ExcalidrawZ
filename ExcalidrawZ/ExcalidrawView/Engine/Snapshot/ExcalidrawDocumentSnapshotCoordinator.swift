@@ -22,7 +22,8 @@ protocol ExcalidrawDocumentSnapshotCoordinatorDelegate: AnyObject {
         currentFileID: String?,
         type: ExcalidrawCanvasView.ExcalidrawType?,
         savingType: UTType?,
-        markProgrammaticCommit: Bool
+        markProgrammaticCommit: Bool,
+        capture: CanvasSaveCapture?
     ) async throws
 
     func snapshotCoordinatorMakeFileData(
@@ -38,8 +39,8 @@ protocol ExcalidrawDocumentSnapshotCoordinatorDelegate: AnyObject {
 final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
     private weak var delegate: ExcalidrawDocumentSnapshotCoordinatorDelegate?
 
-    private lazy var contentScheduler = ExcalidrawDocumentContentSnapshotScheduler { [weak self] in
-        await self?.commitScheduledDirtySnapshot()
+    private lazy var contentScheduler = ExcalidrawDocumentContentSnapshotScheduler { [weak self] state in
+        await self?.commitScheduledDirtySnapshot(state)
     }
     private let appStateSaver = ExcalidrawDocumentAppStateSnapshotSaver()
     private let programmaticCommitter = ExcalidrawDocumentProgrammaticSnapshotCommitter()
@@ -66,35 +67,64 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         reset()
     }
 
+    var hasPendingDirtySnapshot: Bool { delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingSave == true || contentScheduler.hasPendingDirtySnapshot() || appStateSaver.hasPendingSave || programmaticCommitter.hasPendingSave }
+
+    @MainActor
+    func recordAdmittedContent(_ metadata: ExcalidrawCore.StateChangedMetadata, capture: CanvasSaveCapture?) {
+        guard metadata.hasAnyDirtyChanges, metadata.shouldPullContentSnapshot, let capture else { return }
+        try? capture.withAdmission {
+            contentScheduler.recordPendingContentDirty(fileID: capture.owner.fileID, revision: metadata.revision)
+        }
+    }
+
+    @MainActor
     func handleStateChangedMetadata(
         _ metadata: ExcalidrawCore.StateChangedMetadata,
         currentFileID: String?,
         type _: ExcalidrawCanvasView.ExcalidrawType?,
-        savingType: UTType?
-    ) async {
+        savingType: UTType?,
+        capture: CanvasSaveCapture?
+    ) {
         guard metadata.hasAnyDirtyChanges else {
-            contentScheduler.markClean(metadata.revision)
+            // A WebView clean notification is not a durable writer receipt.
+            return
+        }
+
+        guard let capture else { return }
+        try? capture.withAdmission {
+            contentScheduler.recordLatestRevision(metadata.revision)
+            appStateSaver.recordLatestAppState(metadata, capture: capture)
+
+            guard metadata.shouldPullContentSnapshot else {
+                appStateSaver.schedule(
+                    metadata,
+                    currentFileID: currentFileID,
+                    savingType: savingType
+                )
+                return
+            }
+
             appStateSaver.clear()
-            return
         }
+    }
 
-        contentScheduler.recordLatestRevision(metadata.revision)
-        appStateSaver.recordLatestAppState(metadata)
+    func waitForOwnedCanvasOperations() async -> Bool { await programmaticCommitter.waitUntilIdle() }
 
-        guard metadata.shouldPullContentSnapshot else {
-            appStateSaver.schedule(
-                metadata,
-                currentFileID: currentFileID,
-                savingType: savingType
-            )
-            return
-        }
+    func requestCompletedContentCommit(fileID: String, revision: Int) {
+        contentScheduler.requestCompletedContentCommit(fileID: fileID, revision: revision)
+    }
 
-        appStateSaver.clear()
-        contentScheduler.recordPendingContentDirtyMetadata(
-            metadata,
-            currentFileID: currentFileID
-        )
+    func withdrawCompletedContentCommit(fileID: String) {
+        contentScheduler.withdrawCompletedContentCommit(fileID: fileID)
+    }
+
+    @MainActor
+    func performOwnedCanvasMutation(
+        in session: CanvasMutationSession,
+        reason: String,
+        operation: @escaping @MainActor () async throws -> Void
+    ) async throws {
+        try await programmaticCommitter.performOwnedMutation(in: session, reason: reason, operation: operation)
     }
 
     @MainActor
@@ -111,7 +141,8 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         expectedFileID: String? = nil,
         validateParentFileID: Bool = true
     ) async {
-        await contentScheduler.waitForCommitToFinish()
+        guard await programmaticCommitter.waitUntilIdle(),
+              await contentScheduler.waitForCommitToFinish() else { return }
         if let flushState = contentScheduler.takeFlushState() {
             await commitDirtySnapshot(
                 reason: reason,
@@ -119,6 +150,11 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 expectedRevision: flushState.expectedRevision,
                 requirePendingDirty: !force,
                 validateParentFileID: validateParentFileID
+            )
+        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingFullContent == true {
+            await commitDirtySnapshot(
+                reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
+                requirePendingDirty: false, validateParentFileID: validateParentFileID
             )
         } else if force {
             let didCommitCurrentAppState = await appStateSaver.flushCurrentAppState(reason: reason)
@@ -128,25 +164,6 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         } else {
             await appStateSaver.flush(reason: reason)
         }
-    }
-
-    @MainActor
-    func flushPendingDirtySnapshotInBackground(
-        reason: String,
-        expectedFileID: String,
-        target: FileState.CapturedCanvasSaveTarget
-    ) async {
-        let capturedContent = delegate?.snapshotCoordinatorCore?.parent?.file?.content
-        Task(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            await self.flushPendingDirtySnapshotToCapturedTarget(
-                reason: reason,
-                expectedFileID: expectedFileID,
-                target: target,
-                capturedContent: capturedContent
-            )
-        }
-        await Task.yield()
     }
 
     func flushPendingDirtySnapshotToCapturedTarget(
@@ -167,10 +184,7 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         )
     }
 
-    private func commitScheduledDirtySnapshot() async {
-        guard let commitState = contentScheduler.takeScheduledCommitState() else {
-            return
-        }
+    private func commitScheduledDirtySnapshot(_ commitState: ExcalidrawDocumentContentSnapshotScheduler.CommitState) async {
         defer {
             contentScheduler.completeScheduledCommit()
         }
@@ -226,6 +240,10 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 return
             }
 
+            let mutationRevision = await programmaticCommitter.pendingRevision(fileID: currentFileID ?? "")
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: currentFileID) }
+            guard let capture else { throw CancellationError() }
+            let appStateRevision = appStateSaver.pendingRevision
             let snapshot = try await core.getCurrentFileSnapshot()
             if let expectedRevision,
                let snapshotRevision = snapshot.revision,
@@ -241,12 +259,14 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 currentFileID: currentFileID,
                 type: type,
                 savingType: savingType,
-                markProgrammaticCommit: false
+                markProgrammaticCommit: false,
+                capture: capture
             )
-            contentScheduler.markCommitted(
-                snapshotRevision: snapshot.revision,
-                fallbackRevision: expectedRevision
-            )
+            capture.acknowledgeDurable {
+                programmaticCommitter.acknowledge(mutationRevision)
+                appStateSaver.acknowledgeFullSnapshot(appStateRevision)
+                contentScheduler.markCommitted(snapshotRevision: snapshot.revision, fallbackRevision: expectedRevision)
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -262,7 +282,8 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
         capturedContent: Data?,
         forceCurrentAppState: Bool = false
     ) async {
-        await contentScheduler.waitForCommitToFinish()
+        guard await programmaticCommitter.waitUntilIdle(),
+              await contentScheduler.waitForCommitToFinish() else { return }
         if let flushState = contentScheduler.takeFlushState() {
             await commitDirtySnapshotToCapturedTarget(
                 reason: reason,
@@ -270,6 +291,11 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 expectedRevision: flushState.expectedRevision,
                 target: target,
                 capturedContent: capturedContent
+            )
+        } else if programmaticCommitter.hasPendingSave || delegate?.snapshotCoordinatorCore?.parent?.fileState.canvasSaveCoordinator.hasPendingFullContent == true {
+            await commitDirtySnapshotToCapturedTarget(
+                reason: reason, expectedFileID: expectedFileID, expectedRevision: nil,
+                target: target, capturedContent: capturedContent
             )
         } else if forceCurrentAppState {
             let didCommitCurrentAppState = await appStateSaver.flushCurrentAppStateToCapturedTarget(
@@ -314,6 +340,12 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
                 return
             }
 
+            let mutationRevision = await programmaticCommitter.pendingRevision(fileID: expectedFileID)
+            let capture = await MainActor.run { core.parent?.fileState.captureCanvasSave(expectedFileID: expectedFileID) }
+            guard let capture, target.saveSessionID == nil || target.saveSessionID == capture.owner.saveSession else {
+                throw CancellationError()
+            }
+            let appStateRevision = appStateSaver.pendingRevision
             let snapshot = try await core.getCurrentFileSnapshot()
             if let expectedRevision,
                let snapshotRevision = snapshot.revision,
@@ -332,16 +364,29 @@ final class ExcalidrawDocumentSnapshotCoordinator: @unchecked Sendable {
             file.id = expectedFileID
             file.content = capturedContent ?? file.content
             try file.update(data: fileData)
-            await FileState.saveCapturedCanvasUpdate(target, with: file)
-            contentScheduler.markCommitted(
-                snapshotRevision: snapshot.revision,
-                fallbackRevision: expectedRevision
-            )
+            let capturedFile = file
+            try capture.withAdmission {}
+            if case .localFile = target.kind {
+                await MainActor.run {
+                    guard capture.isCurrent, core.parent?.file?.id == expectedFileID,
+                          let fileState = core.parent?.fileState else { return }
+                    fileState.applyExternalCanvasSnapshot { core.parent?.file = capturedFile }
+                }
+            }
+            try await FileState.saveCapturedCanvasUpdate(target, with: file, capture: capture)
+            capture.acknowledgeDurable {
+                programmaticCommitter.acknowledge(mutationRevision)
+                appStateSaver.acknowledgeFullSnapshot(appStateRevision)
+                contentScheduler.markCommitted(snapshotRevision: snapshot.revision, fallbackRevision: expectedRevision)
+            }
             core.logger.debug("Committed background dirty canvas snapshot: \(reason) id=\(expectedFileID)")
         } catch is CancellationError {
             return
         } catch {
             core.logger.error("Failed to commit background dirty canvas snapshot \(reason): \(error)")
+            if case .localFile(let url, _, _) = target.kind {
+                await core.parent?.fileState.reportExternalSaveFailure(error, at: url)
+            }
             core.publishError(error)
         }
     }

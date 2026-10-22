@@ -506,42 +506,35 @@ struct CompactExcalidrawBottomToolbarContent: ToolbarContent {
 
     @ViewBuilder
     private var shapeAndToolMenuItems: some View {
-        ForEach(compactShapeAndToolMenuTools, id: \.self) { tool in
+        ForEach(compactShapeAndToolMenuTools) { item in
             Button {
-                toolState.setActivedTool(tool)
+                toolState.setActivedTool(item.tool)
             } label: {
-                toolMenuLabel(tool)
+                toolMenuLabel(item)
             }
         }
     }
 
-    private var compactShapeAndToolMenuTools: [ExcalidrawTool] {
-        appPreference.toolbarToolOrder.tools.filter { tool in
-            switch tool {
-                case .cursor, .freedraw, .hand, .lasso:
-                    false
-                default:
-                    true
-            }
-        }
+    private var compactShapeAndToolMenuTools: [ExcalidrawToolbarToolPresentation.Item] {
+        ExcalidrawToolbarToolPresentation(order: appPreference.toolbarToolOrder).compactItems
     }
 
     @ViewBuilder
     private func activeShape() -> some View {
         if let tool = toolState.activatedTool,
            tool != .cursor {
-            toolMenuLabel(tool)
+            toolMenuLabel(.init(tool: tool, shortcutLabel: nil))
         } else {
             Label(.localizable(.toolbarShapes), systemSymbol: .squareOnCircle)
         }
     }
 
     @ViewBuilder
-    private func toolMenuLabel(_ tool: ExcalidrawTool) -> some View {
+    private func toolMenuLabel(_ item: ExcalidrawToolbarToolPresentation.Item) -> some View {
         Label {
-            Text(tool.localization)
+            Text(item.menuTitle(localizedName: item.tool.localization))
         } icon: {
-            Image(systemSymbol: tool.menuSystemSymbol)
+            Image(systemSymbol: item.tool.menuSystemSymbol)
         }
     }
 }

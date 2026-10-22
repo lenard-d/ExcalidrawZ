@@ -190,6 +190,11 @@ extension ExcalidrawCore: WKScriptMessageHandler {
                         await self.nativeEyeDropper.request(message.data)
                     }
 
+                case .cancelNativeEyeDropper(let message):
+                    Task { @MainActor in
+                        self.nativeEyeDropper.cancel(requestId: message.data.requestId)
+                    }
+
                 case .currentFileSaveStreamStarted(let message):
                     currentFileSaveStreamBridge.receiveStarted(message.data)
                 case .currentFileSaveStreamChunk(let message):
@@ -304,8 +309,10 @@ extension ExcalidrawCore: WKScriptMessageHandler {
 extension ExcalidrawCore {
     func onStateChanged(_ data: StateChangedMessageData) {
         let documentSyncController = documentSyncController
-        Task {
-            await documentSyncController.save(data)
+        // WKScriptMessageHandler delivers this callback on the main thread.
+        MainActor.assumeIsolated {
+            guard let admission = documentSyncController.admitStateChanged(data) else { return }
+            Task { await documentSyncController.save(data, admission: admission) }
         }
     }
     
@@ -574,6 +581,7 @@ extension ExcalidrawCore {
 
         // Native eye dropper
         case requestNativeEyeDropper
+        case cancelNativeEyeDropper
 
         // Current file save stream
         case currentFileSaveStreamStarted
@@ -627,6 +635,7 @@ extension ExcalidrawCore {
 
         // Native eye dropper
         case requestNativeEyeDropper(RequestNativeEyeDropperMessage)
+        case cancelNativeEyeDropper(CancelNativeEyeDropperMessage)
 
         // Current file save stream
         case currentFileSaveStreamStarted(CurrentFileSaveStreamStartedMessage)
@@ -734,6 +743,8 @@ extension ExcalidrawCore {
                 // Native eye dropper
                 case .requestNativeEyeDropper:
                     self = .requestNativeEyeDropper(try RequestNativeEyeDropperMessage(from: decoder))
+                case .cancelNativeEyeDropper:
+                    self = .cancelNativeEyeDropper(try CancelNativeEyeDropperMessage(from: decoder))
 
                 // Current file save stream
                 case .currentFileSaveStreamStarted:
@@ -773,6 +784,11 @@ extension ExcalidrawCore {
     struct RequestNativeEyeDropperMessage: AnyExcalidrawZMessage {
         var event: String
         var data: NativeEyeDropperRequest
+    }
+
+    struct CancelNativeEyeDropperMessage: AnyExcalidrawZMessage {
+        var event: String
+        var data: CancelNativeEyeDropperRequest
     }
 
     struct CurrentFileSaveStreamStartedMessage: AnyExcalidrawZMessage {
@@ -1006,6 +1022,9 @@ extension ExcalidrawCore {
         var appStateKeyCount: Int?
         var appStateChars: Int?
         var currentFileId: String?
+        /// Timing hint for previously reported content, never a writer receipt.
+        var completedContentRevision: Int?
+        var contentInteractionActive: Bool?
 
         var hasDirtySplitFields: Bool {
             contentDirty != nil || appStateDirty != nil

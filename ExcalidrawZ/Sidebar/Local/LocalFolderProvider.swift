@@ -44,29 +44,26 @@ struct LocalFoldersProvider<Content: View>: View {
 
     @State private var window: PlatformWindow?
     @State private var folderUrlBeforeResignKey: URL?
+    @State private var refreshTask: Task<Void, Never>?
 
     
     var body: some View {
         content(folders)
             .bindWindow($window)
+            .onDisappear { refreshTask?.cancel() }
     #if os(macOS)
             .onReceive(
                 NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
             ) { notification in
                 if let window = notification.object as? NSWindow,
                    window == self.window {
-                    do {
-                        try self.refreshFoldersContent()
-                        try redirectToCurrentFolder()
-                    } catch {
-                        alertToast(error)
-                    }
-                    folderUrlBeforeResignKey = nil
+                    refreshFoldersContent()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { notification in
                 if let window = notification.object as? NSWindow,
                    window == self.window {
+                    refreshTask?.cancel()
                     if case .localFolder(let localFolder) = fileState.currentActiveGroup {
                         self.folderUrlBeforeResignKey = localFolder.url
                     }
@@ -75,28 +72,39 @@ struct LocalFoldersProvider<Content: View>: View {
 #elseif os(iOS)
             .watch(value: scenePhase) { newValue in
                 if newValue == .active {
-                    do {
-                        try self.refreshFoldersContent()
-                        try redirectToCurrentFolder()
-                    } catch {
-                        alertToast(error)
-                    }
+                    refreshFoldersContent()
+                } else {
+                    refreshTask?.cancel()
                 }
             }
 #endif
     }
 
     @MainActor
-    private func refreshFoldersContent() throws {
-        for i in 0..<folders.count {
-            if let change = try folders[i].refreshResolvedLocation(context: viewContext),
-               let folderUrlBeforeResignKey {
-                self.folderUrlBeforeResignKey = folderUrlBeforeResignKey.rebased(
-                    from: change.oldURL,
-                    to: change.newURL
-                ) ?? folderUrlBeforeResignKey
+    private func refreshFoldersContent() {
+        refreshTask?.cancel()
+        let folderIDs = folders.map(\.objectID)
+        refreshTask = Task { @MainActor in
+            do {
+                for folderID in folderIDs {
+                    if let change = try await LocalFolder.refreshChildrenOffMain(
+                        folderID: folderID,
+                        context: viewContext
+                    ), let folderUrlBeforeResignKey {
+                        self.folderUrlBeforeResignKey = folderUrlBeforeResignKey.rebased(
+                            from: change.oldURL,
+                            to: change.newURL
+                        ) ?? folderUrlBeforeResignKey
+                    }
+                }
+                try Task.checkCancellation()
+                try redirectToCurrentFolder()
+                folderUrlBeforeResignKey = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                alertToast(error)
             }
-            try folders[i].refreshChildren(context: viewContext)
         }
     }
 

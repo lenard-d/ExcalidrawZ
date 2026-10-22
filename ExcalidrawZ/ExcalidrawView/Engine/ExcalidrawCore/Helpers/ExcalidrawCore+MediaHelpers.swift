@@ -130,13 +130,12 @@ extension ExcalidrawCore {
         var buffer = [UInt8].init(repeating: 0, count: imageData.count)
         imageData.copyBytes(to: &buffer, count: imageData.count)
         let buf = buffer
-        let raw = try await webView.callAsyncJavaScript(
+        let raw = try await callOwnedCanvasMutation(
             "return await window.excalidrawZHelper.loadImageBuffer(\(buf), type);",
             arguments: ["type": type],
-            contentWorld: .page
+            reason: "loadImageToExcalidrawCanvas"
         )
         let result = LoadImageResult(fromJS: raw)
-        documentSyncController.scheduleProgrammaticMutationCommit(reason: "loadImageToExcalidrawCanvas")
         return result
     }
 }

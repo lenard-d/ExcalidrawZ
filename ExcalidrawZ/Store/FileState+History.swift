@@ -54,10 +54,7 @@ extension FileState {
                 let activeFile = ActiveFile.localFile(fileURL)
                 let parsedFile = try ExcalidrawFile(data: content, id: activeFile.id)
 
-                try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: fileURL) {
-                    try await FileCoordinator.shared.coordinatedWrite(url: fileURL, data: content)
-                    Self.touchLocalFileModificationDate(fileURL, logger: self.logger)
-                }
+                try await saveRestoredExternalCanvas(parsedFile, at: fileURL)
                 do {
                     try await recordLocalRestoreCheckpoint(
                         url: fileURL,
@@ -66,13 +63,6 @@ extension FileState {
                 } catch {
                     logger.warning("Failed to record local restore checkpoint for \(fileURL.lastPathComponent): \(error.localizedDescription)")
                 }
-
-                guard currentActiveFile?.id == activeFile.id else { return }
-                await excalidrawWebCoordinator?.loadFile(from: parsedFile, force: true)
-                NotificationCenter.default.post(
-                    name: .activeCanvasFileDidRestore,
-                    object: parsedFile
-                )
 
             case .collaborationFile(let collaborationFile):
                 let activeFile = ActiveFile.collaborationFile(collaborationFile)

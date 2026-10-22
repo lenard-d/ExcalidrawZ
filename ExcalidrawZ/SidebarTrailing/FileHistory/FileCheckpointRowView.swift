@@ -15,20 +15,53 @@ private let fileCheckpointRowLogger = Logger(label: "FileCheckpointRowView")
 struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
     @ObservedObject var checkpoint: Checkpoint
     var presentsDetail = true
+
+    var body: some View {
+        FileCheckpointAccessView(checkpoint: checkpoint) {
+            FileCheckpointUnlockedRow(checkpoint: checkpoint, presentsDetail: presentsDetail)
+        }
+    }
+}
+
+/// Removing the child on relock releases its decrypted row and detail state.
+private struct FileCheckpointAccessView<Checkpoint: FileCheckpointRepresentable, Content: View>: View {
+    @ObservedObject var checkpoint: Checkpoint
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        if let file = (checkpoint as? FileCheckpoint)?.file {
+            FilePreviewLockStateReader(file: .file(file)) { lockState in
+                if let lockState, lockState != .locked {
+                    content()
+                }
+            }
+        } else {
+            content()
+        }
+    }
+}
+
+private struct FileCheckpointUnlockedRow<Checkpoint: FileCheckpointRepresentable>: View {
+    @ObservedObject var checkpoint: Checkpoint
+    var presentsDetail: Bool
     
-    @State private var file: ExcalidrawFile?
-    @State private var fileSize: Int = 0
+    @State private var metadata: FileCheckpointMetadata?
     
     var body: some View {
         content()
             .task(id: checkpointMetadataLoadID, priority: .background) {
+                let loadID = checkpointMetadataLoadID
+                metadata = nil
                 do {
                     let content = try await loadContent(for: checkpoint)
-                    let file = try? JSONDecoder().decode(ExcalidrawFile.self, from: content)
+                    let metadata = try await FileCheckpointMetadataReader.shared.read(content)
+                    try Task.checkCancellation()
                     await MainActor.run {
-                        self.fileSize = content.count
-                        self.file = file
+                        guard !Task.isCancelled, loadID == checkpointMetadataLoadID else { return }
+                        self.metadata = metadata
                     }
+                } catch is CancellationError {
+                    return
                 } catch {
                     fileCheckpointRowLogger.warning("Failed to load checkpoint metadata: \(error)")
                 }
@@ -46,14 +79,18 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
         } else {
 #if os(iOS)
             NavigationLink {
-                FileCheckpointDetailView(checkpoint: checkpoint)
+                FileCheckpointAccessView(checkpoint: checkpoint) {
+                    FileCheckpointDetailView(checkpoint: checkpoint)
+                }
             } label: {
                 label()
             }
             .buttonStyle(.plain)
 #elseif os(macOS)
             Popover(arrowEdge: .trailing) {
-                FileCheckpointDetailView(checkpoint: checkpoint)
+                FileCheckpointAccessView(checkpoint: checkpoint) {
+                    FileCheckpointDetailView(checkpoint: checkpoint)
+                }
             } label: {
                 label()
             }
@@ -82,8 +119,7 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 0) {
-                        if let file {
-                            let elementCount = file.elements.filter { !$0.isDeleted }.count
+                        if let elementCount = metadata?.elementCount {
                             if #available(macOS 13.0, iOS 16.0, *) {
                                 Text(.localizable(.checkpointsElementsDescription(elementCount)))
                             } else {
@@ -92,7 +128,7 @@ struct FileCheckpointRowView<Checkpoint: FileCheckpointRepresentable>: View {
                             Text(" · ")
                         }
 
-                        Text("\(fileSize.formatted(.byteCount(style: .file)))")
+                        Text("\((metadata?.byteCount ?? 0).formatted(.byteCount(style: .file)))")
                     }
                     .font(.footnote)
                     .foregroundStyle(.secondary)

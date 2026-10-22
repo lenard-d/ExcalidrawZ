@@ -63,6 +63,11 @@ enum ExcalidrawDocumentAppStatePersistence {
         return try JSONSerialization.data(withJSONObject: documentObject)
     }
 
+    /// Exclude runtime-only values before encoding, so discarded branches are never traversed.
+    static func appStateOnlyPersistentData<Value: Encodable>(from appState: [String: Value]) throws -> Data {
+        try JSONEncoder().encode(appState.filter { appStateOnlyPersistentKeys.contains($0.key) })
+    }
+
     static func appStateObjectByKeepingAppStateOnlyPersistentFields(from appStateObject: Any) -> [String: Any] {
         guard let appState = appStateObject as? [String: Any] else {
             return [String: Any]()

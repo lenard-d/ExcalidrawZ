@@ -110,15 +110,22 @@ extension ExcalidrawFile {
     }
     
     mutating func syncFiles(context: NSManagedObjectContext) async throws {
-        let mediasFetchRequest = NSFetchRequest<MediaItem>(entityName: "MediaItem")
-        mediasFetchRequest.predicate = NSPredicate(format: "file.id == %@", self.id as CVarArg)
-        let medias: [MediaItem] = try context.fetch(mediasFetchRequest)
+        // External documents use URL IDs and already contain their resources.
+        guard let libraryID = UUID(uuidString: id) else {
+            try updateContentFilesFromFiles()
+            return
+        }
+        let medias = try await context.perform {
+            let request = NSFetchRequest<MediaItem>(entityName: "MediaItem")
+            request.predicate = NSPredicate(format: "file.id == %@", libraryID as NSUUID)
+            return try context.fetch(request).compactMap(ExportMediaSnapshot.init)
+        }
 
         // Load all ResourceFiles concurrently
         let resourceFiles = try await withThrowingTaskGroup(of: ExcalidrawFile.ResourceFile?.self) { group in
             for media in medias {
                 group.addTask {
-                    try? await ExcalidrawFile.ResourceFile(mediaItem: media)
+                    try? await media.resourceFile()
                 }
             }
 
@@ -140,6 +147,34 @@ extension ExcalidrawFile {
         try self.updateContentFilesFromFiles()
     }
     
+}
+
+/// Values copied on the context queue before asynchronous media loading.
+private struct ExportMediaSnapshot: Sendable {
+    let resource: ExcalidrawFile.ResourceFile
+    let filePath: String?
+    let fallbackDataURL: String?
+
+    init?(media: MediaItem) {
+        guard let id = media.id else { return nil }
+        resource = ExcalidrawFile.ResourceFile(
+            mimeType: media.mimeType ?? "image/png",
+            id: id,
+            createdAt: media.createdAt ?? .distantPast,
+            dataURL: "",
+            lastRetrievedAt: media.lastRetrievedAt ?? .distantPast
+        )
+        filePath = media.filePath
+        fallbackDataURL = media.dataURL
+    }
+
+    func resourceFile() async throws -> ExcalidrawFile.ResourceFile {
+        var result = resource
+        result.dataURL = try await MediaItem.loadDataURL(
+            filePath: filePath, mediaID: resource.id, fallbackDataURL: fallbackDataURL
+        )
+        return result
+    }
 }
 
 extension ExcalidrawFile.ResourceFile {

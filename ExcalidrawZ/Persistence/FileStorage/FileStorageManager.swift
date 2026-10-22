@@ -242,14 +242,16 @@ actor FileStorageManager {
         _ content: Data,
         fileID: String,
         type: ContentType,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        capture: CanvasSaveCapture? = nil
     ) async throws -> String {
         // Step 1: Save to local storage (always succeeds or throws)
         let saveResult = try await localManager.saveContent(
             content,
             fileID: fileID,
             type: type,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            capture: capture
         )
 
         if saveResult.wasModified {

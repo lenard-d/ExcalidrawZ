@@ -1,0 +1,32 @@
+--- a/packages/excalidraw/renderer/interactiveScene.ts
++++ b/packages/excalidraw/renderer/interactiveScene.ts
+@@ -36,6 +36,7 @@
+   isArrowElement,
+   isBindableElement,
+   isElbowArrow,
++  isEligibleFrameChildType,
+   isFrameLikeElement,
+   isImageElement,
+   isLinearElement,
+@@ -1749,13 +1750,14 @@
+     );
+   }
+ 
+-  if (appState.frameToHighlight) {
+-    renderFrameHighlight(
+-      context,
+-      appState,
+-      appState.frameToHighlight,
+-      elementsMap,
+-    );
++  const frameToHighlight = appState.frameToHighlight;
++  const isTaggedPageWritingTarget =
++    frameToHighlight?.type === "frame" &&
++    frameToHighlight.customData?.excalidrawZPage?.version === 1 &&
++    isEligibleFrameChildType(appState.activeTool.type);
++
++  if (frameToHighlight && !isTaggedPageWritingTarget) {
++    renderFrameHighlight(context, appState, frameToHighlight, elementsMap);
+   }
+ 
+   if (appState.elementsToHighlight) {

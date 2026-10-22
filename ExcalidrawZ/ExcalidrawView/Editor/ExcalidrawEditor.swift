@@ -52,6 +52,7 @@ struct ExcalidrawEditor: View {
 
     @StateObject private var toolState = ToolState()
 
+    @State private var saveFailureExportFile: ExcalidrawFile?
     @State private var isSettingsPresented = false
     @State private var excalidrawFile: ExcalidrawFile?
     @State private var isLoadingFile = false
@@ -264,9 +265,21 @@ struct ExcalidrawEditor: View {
             }
 #endif
 
+#if os(iOS)
+            if isInCollaborationSpace || !ExcalidrawToolbarLayoutPolicy.usesNativeIPadControls(
+                isPad: UIDevice.current.userInterfaceIdiom == .pad,
+                horizontalSizeClass: containerHorizontalSizeClass,
+                containerWidth: containerSize.width
+            ) {
+                ExcalidrawTrailingControls()
+                    .opacity(isLoadingFile ? 0 : 1)
+                    .allowsHitTesting(!isLoadingFile)
+            }
+#else
             ExcalidrawTrailingControls()
                 .opacity(isLoadingFile ? 0 : 1)
                 .allowsHitTesting(!isLoadingFile)
+#endif
         }
         .readSize($editorContentSize)
         .overlay(alignment: .bottom) {
@@ -440,7 +453,15 @@ struct ExcalidrawEditor: View {
                   activeFile?.id == restoredFile.id else {
                 return
             }
-            excalidrawFile = restoredFile
+            if let owner = notification.userInfo?["saveOwner"] as? ObjectIdentifier,
+               owner != ObjectIdentifier(fileState) { return }
+            fileState.applyExternalCanvasSnapshot {
+                if notification.userInfo?["forceReload"] as? Bool == true {
+                    applyFileToEditorAndForceReload(restoredFile)
+                } else {
+                    excalidrawFile = restoredFile
+                }
+            }
             lastEditTime = Date()
         }
         .onReceive(
@@ -507,8 +528,41 @@ struct ExcalidrawEditor: View {
         }
     }
 
+    @MainActor
+    private func prepareSaveFailureExport() async {
+        guard lockedContentState.activeFileLockState != .locked,
+              let controller = fileState.excalidrawWebCoordinator?.documentSyncController else { return }
+        do {
+            let file = try await controller.currentCanvasFileForRecoveryExport()
+            guard lockedContentState.activeFileLockState != .locked else { return }
+            saveFailureExportFile = file
+        } catch {
+            fileState.externalSaveErrorMessage = "Could not capture the current drawing for export. Your edits remain in this window. Keep it open and try again. " + error.localizedDescription
+        }
+    }
+
     var body: some View {
         editorWithDocumentLifecycle
+#if os(macOS)
+        .guardExternalSaveWindowClose(participant: fileState)
+#endif
+        .alert("Drawing not saved", isPresented: Binding(
+            get: { fileState.externalSaveErrorMessage != nil },
+            set: { if !$0 { fileState.externalSaveErrorMessage = nil } }
+        )) {
+            Button("Retry save") {
+                Task { await fileState.retryCurrentExternalSave() }
+            }
+            Button("Export a copy") {
+                Task { await prepareSaveFailureExport() }
+            }
+            Button("Keep editing", role: .cancel) { }
+        } message: {
+            Text(fileState.externalSaveErrorMessage ?? "")
+        }
+        .sheet(item: $saveFailureExportFile) { file in
+            ExportFileView(file: file)
+        }
         .modifier(ExcalidrawEditorToolbarModifier())
         .onReceive(NotificationCenter.default.publisher(for: .pencilInteractionModeDidChange)) { notification in
             guard let mode = notification.object as? ToolState.PencilInteractionMode else { return }
@@ -729,17 +783,23 @@ struct ExcalidrawEditor: View {
                     
                 case .localFile(let url):
                     let data = try await FileSyncCoordinator.shared.openFile(url)
+                    let saveSession = try await fileState.recordExternalFileRead(data, at: url)
+                    defer { Task { await fileState.releaseUnusedExternalSaveSession(saveSession) } }
                     let file = try ExcalidrawFile(data: data, id: activeFile.id)
                     await MainActor.run {
                         guard self.activeFile?.id == activeFile.id else { return }
+                        self.fileState.installExternalSaveSession(saveSession)
                         self.excalidrawFile = file
                     }
 
                 case .temporaryFile(let url):
                     let data = try await fileState.readTemporaryFileContent(at: url)
+                    let saveSession = try await fileState.recordExternalFileRead(data, at: url)
+                    defer { Task { await fileState.releaseUnusedExternalSaveSession(saveSession) } }
                     let file = try ExcalidrawFile(data: data, id: activeFile.id)
                     await MainActor.run {
                         guard self.activeFile?.id == activeFile.id else { return }
+                        self.fileState.installExternalSaveSession(saveSession)
                         self.excalidrawFile = file
                     }
 
@@ -1112,38 +1172,109 @@ struct ExcalidrawEditor: View {
             return
         }
 
+        let reloadOwnerToken = await MainActor.run { fileState.terminationSaveToken }
+        let reloadRevision = reloadOwnerToken.editRevision
+        let reloadEditTime = latestLocalCanvasEditTime()
+        var reloadData = latestData
+        var acceptedSession: UUID?
+        defer {
+            if let session = acceptedSession {
+                Task { await fileState.releaseUnusedExternalSaveSession(session) }
+            }
+        }
+        switch targetFile {
+            case .localFile(let url), .temporaryFile(let url):
+                do {
+                    guard let reload = try await fileState.prepareExternalFileReload(at: url) else { return }
+                    acceptedSession = reload.session
+                    reloadData = reload.content
+                } catch is CancellationError {
+                    return
+                } catch {
+                    fileState.reportExternalSaveFailure(error, at: url)
+                    return
+                }
+            default:
+                break
+        }
         self.logger.info("pullUpdatingFromCloud")
         do {
             let data: Data
             if case .file = targetFile {
                 data = try await ExcalidrawViewportStateStore.shared
                     .contentDataByApplyingStoredViewport(
-                        to: latestData,
+                        to: reloadData,
                         fileID: targetFileID
                     )
             } else {
-                data = latestData
+                data = reloadData
             }
             guard !Task.isCancelled else { return }
             let file = try ExcalidrawFile(data: data, id: targetFileID)
-            await MainActor.run {
+            let conditionalLoad = await MainActor.run { () -> (ExcalidrawDocumentSyncController, ExternalCanvasReloadRequest)? in
                 guard !Task.isCancelled,
-                      self.externallyObservedDocument?.id == targetFileID else { return }
-                if let currentFile = self.excalidrawFile,
-                   !self.hasPersistentCanvasChanges(in: file, comparedTo: currentFile) {
-                    self.logger.debug("Ignored duplicate cloud document update id=\(targetFileID)")
-                    return
+                      self.externallyObservedDocument?.id == targetFileID else { return nil }
+                let isDuplicate = self.excalidrawFile.map {
+                    !self.hasPersistentCanvasChanges(in: file, comparedTo: $0)
+                } ?? false
+                if let acceptedSession {
+                    guard self.fileState.terminationSaveToken == reloadOwnerToken,
+                          self.latestLocalCanvasEditTime() == reloadEditTime,
+                          self.fileState.excalidrawWebCoordinator?.documentSyncController.externalReloadRevision == reloadRevision,
+                          self.fileState.excalidrawWebCoordinator?.documentSyncController.hasPendingDirtySnapshot != true else {
+                        self.reportRejectedExternalReload(targetFile)
+                        return nil
+                    }
+                    if isDuplicate {
+                        // Accept the new disk identity even when the visible scene is unchanged.
+                        self.fileState.installExternalSaveSession(acceptedSession)
+                        return nil
+                    }
+                    guard let controller = self.fileState.excalidrawWebCoordinator?.documentSyncController,
+                          let reloadRevision else { return nil }
+                    let ownerToken = reloadOwnerToken
+                    let request = ExternalCanvasReloadRequest(
+                        fileID: targetFileID,
+                        editRevision: reloadRevision,
+                        loadGeneration: ownerToken.loadGeneration,
+                        isCurrent: {
+                            self.externallyObservedDocument?.id == targetFileID
+                                && self.fileState.terminationSaveToken.hasSameOwnerAndEdits(as: ownerToken)
+                                && self.latestLocalCanvasEditTime() == reloadEditTime
+                                && self.fileState.excalidrawWebCoordinator?.documentSyncController === controller
+                                && !controller.hasPendingDirtySnapshot
+                        },
+                        onAccept: {
+                            self.fileState.installExternalSaveSession(acceptedSession)
+                            self.fileState.applyExternalCanvasSnapshot { self.excalidrawFile = file }
+                        },
+                        onReject: { self.reportRejectedExternalReload(targetFile) }
+                    )
+                    return (controller, request)
                 }
+                guard !isDuplicate else { return nil }
                 self.applyFileToEditorAndForceReload(file)
+                return nil
             }
+            if let (controller, request) = conditionalLoad {
+                await controller.load(file, force: true, externalReload: request)
+            }
+
         } catch {
             guard !Task.isCancelled,
                   externallyObservedDocument?.id == targetFileID else { return }
             alertToast(error)
-            await MainActor.run {
-                guard self.externallyObservedDocument?.id == targetFileID else { return }
-                self.excalidrawFile = nil
-            }
+            // Keep the visible drawing available for export after a failed reload.
+        }
+    }
+
+    @MainActor
+    private func reportRejectedExternalReload(_ target: FileState.ActiveFile) {
+        switch target {
+            case .localFile(let url), .temporaryFile(let url):
+                fileState.reportExternalSaveFailure(ExternalFileConflict(), at: url)
+            default:
+                break
         }
     }
 
@@ -1224,43 +1355,16 @@ struct ExcalidrawEditor: View {
                 logger.debug("Mirroring library canvas update id=\(activeFile.id?.uuidString ?? file.id) elements=\(file.elements.count)")
                 return .accepted
 
-            case .localFile(let url):
-                logger.debug("Persisting local canvas update id=\(file.id) url=\(url.lastPathComponent) elements=\(file.elements.count)")
+            case .localFile(let url), .temporaryFile(let url):
+                if fileState.isApplyingExternalCanvasSnapshot { return .accepted }
+                guard let capture = fileState.captureCanvasSave(expectedFileID: file.id) else { return .rejected }
                 Task {
                     do {
-                        try await LocalFolder.withSecurityScopedAccessToContainingFolder(for: url) {
-                            let oldFile = try ExcalidrawFile(contentsOf: url)
-                            if !hasPersistentCanvasChanges(in: file, comparedTo: oldFile) {
-                                return
-                            }
-                            try await fileState.updateLocalFile(
-                                to: url,
-                                with: file,
-                                context: viewContext
-                            )
-                        }
+                        try await fileState.persistExternalCanvasUpdate(file, to: url, capture: capture)
+                    } catch is CancellationError {
+                        return
                     } catch {
-                        alertToast(error)
-                    }
-                }
-                return .accepted
-
-            case .temporaryFile(let url):
-                logger.debug("Persisting temporary canvas update id=\(file.id) url=\(url.lastPathComponent) elements=\(file.elements.count)")
-                Task {
-                    do {
-                        let oldContent = try await fileState.readTemporaryFileContent(at: url)
-                        let oldFile = try ExcalidrawFile(data: oldContent, id: file.id)
-                        if !hasPersistentCanvasChanges(in: file, comparedTo: oldFile) {
-                            return
-                        }
-                        try await fileState.updateLocalFile(
-                            to: url,
-                            with: file,
-                            context: viewContext
-                        )
-                    } catch {
-                        alertToast(error)
+                        fileState.reportExternalSaveFailure(error, at: url)
                     }
                 }
                 return .accepted

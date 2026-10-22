@@ -27,28 +27,51 @@ struct TemporaryFileContextMenuModifier: ViewModifier {
 }
 
 enum TemporaryFileActions {
+    @MainActor private static var closeSequences: [ObjectIdentifier: TemporaryFileCloseSequence] = [:]
+
     @MainActor
-    static func close(_ files: Set<URL>, fileState: FileState) {
-        let filesToClose = Array(files)
-        guard !filesToClose.isEmpty else { return }
-
-        let currentActiveFile: URL? = if case .temporaryFile(let file) = fileState.currentActiveFile {
-            file
-        } else {
-            nil
-        }
-        let didCloseCurrent = currentActiveFile.map { filesToClose.contains($0) } ?? false
-
-        fileState.temporaryFiles.removeAll { files.contains($0) }
-        deleteAIConversations(for: filesToClose)
-
-        if didCloseCurrent {
-            if fileState.temporaryFiles.isEmpty {
-                fileState.currentActiveGroup = nil
-                fileState.setActiveFile(nil)
-            } else if let nextFile = fileState.temporaryFiles.first {
-                fileState.setActiveFile(.temporaryFile(nextFile))
+    @discardableResult
+    static func close(_ files: Set<URL>, fileState: FileState) async -> Bool {
+        let key = ObjectIdentifier(fileState)
+        let sequence = closeSequences[key] ?? TemporaryFileCloseSequence()
+        closeSequences[key] = sequence
+        defer {
+            if sequence.isIdle, closeSequences[key] === sequence {
+                closeSequences.removeValue(forKey: key)
             }
+        }
+        return await sequence.perform {
+            guard !Task.isCancelled else { return false }
+            let filesToClose = files.intersection(Set(fileState.temporaryFiles))
+            guard !filesToClose.isEmpty else { return true }
+
+            let currentActiveFile: URL? = if case .temporaryFile(let file) = fileState.currentActiveFile {
+                file
+            } else {
+                nil
+            }
+            if currentActiveFile.map({ filesToClose.contains($0) }) == true {
+                let nextFile = fileState.temporaryFiles.first { !filesToClose.contains($0) }
+                let destination = nextFile.map { FileState.ActiveFile.temporaryFile($0) }
+                guard await fileState.requestActiveFileChange(destination) else { return false }
+            }
+
+            guard !Task.isCancelled else { return false }
+            if case .temporaryFile(let activeFile) = fileState.currentActiveFile,
+               filesToClose.contains(activeFile) {
+                return false
+            }
+            let closedFiles = filesToClose.intersection(Set(fileState.temporaryFiles))
+            guard !closedFiles.isEmpty else { return true }
+
+            fileState.temporaryFiles.removeAll { closedFiles.contains($0) }
+            if fileState.temporaryFiles.isEmpty,
+               fileState.currentActiveFile == nil,
+               fileState.currentActiveGroup == .temporary {
+                fileState.currentActiveGroup = nil
+            }
+            deleteAIConversations(for: Array(closedFiles))
+            return true
         }
     }
 
@@ -188,7 +211,7 @@ struct TemporaryFileMenuItems: View {
         Divider()
         
         Button {
-            TemporaryFileActions.close(files, fileState: fileState)
+            Task { await TemporaryFileActions.close(files, fileState: fileState) }
         } label: {
             Label {
                 if #available(macOS 13.0, iOS 16.0, *), files.count > 1 {
